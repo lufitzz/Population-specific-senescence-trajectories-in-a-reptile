@@ -1,0 +1,471 @@
+---
+title: "Six panel figure"
+author: "Luisa Fitzpatrick"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 6)
+```
+
+
+**Requirements:**
+- BaFTA outputs in `bafta_outputs/` directory
+- BaSTA outputs in `basta_outputs/` directory  
+- Growth curve data: `Growthcurvedata.csv`
+- Main data: `OcellatusNatPop_FullDataset_2025.csv`
+
+```{r six-panel-figure}
+# Load required libraries
+library(tidyverse)
+library(cowplot)
+library(ggplot2)
+library(BaSTA)
+library(BaFTA)
+
+# ============== LOAD ALL REQUIRED MODEL OUTPUTS ==============
+# Load BaFTA outputs (adjust paths if needed)
+out_CM_CP <- readRDS("bafta_outputs/out_CM_CP.rds")
+out_CM_OR <- readRDS("bafta_outputs/out_CM_OR.rds")
+
+# Load BaSTA outputs (adjust paths if your BaSTA outputs are elsewhere)
+# These should be Gompertz-Makeham models for both populations
+out_CP <- readRDS("basta outputs/out_CP.rds")          # Cool highland
+out_OR_GM <- readRDS("basta outputs/out_OR_GM.rds")    # Warm lowland
+
+# Load main data if not already in environment
+data <- read.csv(file = "OcellatusNatPop_FullDataset_2025.csv", 
+                   na = c("", "NA", ".", "?"))[ ,c('Year', 'FemID', 'Site', 'Age', 'Clutch')]
+  
+data <- data %>%
+    rename(year = Year, indID = FemID, site = Site, nOffspring = Clutch)
+  
+data$indID <- as.factor(data$indID)
+data$site <- as.factor(data$site)
+data$Age <- as.integer(data$Age)
+data$nOffspring <- as.integer(data$nOffspring)
+  
+data <- subset(data,
+                !is.na(indID) & indID != 0 &
+                !is.na(Age) & Age != 0 &
+                !is.na(nOffspring) & nOffspring != 0)
+
+# Extract BaFTA fertility trajectories
+fert_OR <- data.frame(
+  age = out_CM_OR$x,
+  median = out_CM_OR$fert[, "Mean"],
+  lower = out_CM_OR$fert[, "Lower"],
+  upper = out_CM_OR$fert[, "Upper"],
+  site = "Warm lowland"
+)
+
+fert_CP <- data.frame(
+  age = out_CM_CP$x,
+  median = out_CM_CP$fert[, "Mean"],
+  lower = out_CM_CP$fert[, "Lower"],
+  upper = out_CM_CP$fert[, "Upper"],
+  site = "Cool highland"
+)
+
+fert_data <- bind_rows(fert_OR, fert_CP)
+
+# Extract BaFTA parameter posteriors
+params_OR <- as.data.frame(out_CM_OR$theta) %>%
+  mutate(site = "Warm lowland")
+params_CP <- as.data.frame(out_CM_CP$theta) %>%
+  mutate(site = "Cool highland")
+
+params_combined <- bind_rows(params_OR, params_CP) %>%
+  pivot_longer(cols = c(b0, b3),
+               names_to = "parameter", 
+               values_to = "value")
+
+# Define consistent colors and labels
+site_colors <- c("Warm lowland" = "coral1", "Cool highland" = "cornflowerblue")
+
+theme_publication <- theme_classic(base_size = 11) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.line = element_line(color = "black"),
+    plot.margin = margin(5, 5, 5, 5),
+    legend.text = element_text(size = 9),
+    legend.title = element_blank())
+
+# ============== PANEL A: Growth curves ==============
+# Load growth data
+growth_data_all <- read.csv("Growthcurvedata.csv", 
+                            na.strings = c("", ",", "NA", "."), 
+                            header = TRUE)
+
+# Load von Bertalanffy models for adults (ages 2+)
+# If you have these saved, load them; otherwise you'll need to fit them
+# fit_vb_OR <- readRDS("growth_models/fit_vb_OR.rds")
+# fit_vb_CP <- readRDS("growth_models/fit_vb_CP.rds")
+# early_model_quad <- readRDS("growth_models/early_model_quad.rds")
+
+# Or fit them quickly (assuming growth_data_all is available):
+growth_data_adults <- growth_data_all %>% 
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), 
+         !is.na(Age), !is.na(FEMID.),
+         Age >= 2)
+
+growth_data_OR <- growth_data_adults %>% filter(SITE. == "OR")
+growth_data_CP <- growth_data_adults %>% filter(SITE. == "CP")
+
+fit_vb_OR <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+fit_vb_CP <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Fit quadratic model for early growth (ages 0-2)
+early_growth <- growth_data_all %>%
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), 
+         !is.na(Age), Age <= 2) %>%
+  mutate(Site = factor(SITE., levels = c("OR", "CP")))
+
+early_model_quad <- lm(FSVLAFTER ~ poly(Age, 2) * Site, data = early_growth)
+
+# Generate predictions for ages 2+ (von Bertalanffy)
+newdata_OR <- data.frame(Age = seq(2, 14, length.out = 100))
+newdata_CP <- data.frame(Age = seq(2, 14, length.out = 100))
+
+pred_OR <- newdata_OR %>%
+  mutate(
+    FSVLAFTER = predict(fit_vb_OR, newdata = newdata_OR, level = 0),
+    Site = "OR")
+
+pred_CP <- newdata_CP %>%
+  mutate(
+    FSVLAFTER = predict(fit_vb_CP, newdata = newdata_CP, level = 0),
+    Site = "CP")
+
+# Bootstrap confidence intervals
+set.seed(123)
+
+boot_predict_OR <- function() {
+  beta <- fixef(fit_vb_OR)
+  vcov_beta <- vcov(fit_vb_OR)
+  sim_beta <- MASS::mvrnorm(1, beta, vcov_beta)
+  Linf_sim * (1 - exp(-K_sim * (newdata_OR$Age - t0_sim)))
+}
+
+boot_OR <- replicate(1000, boot_predict_OR())
+pred_OR$lower <- apply(boot_OR, 1, quantile, 0.025)
+pred_OR$upper <- apply(boot_OR, 1, quantile, 0.975)
+
+boot_predict_CP <- function() {
+  beta <- fixef(fit_vb_CP)
+  vcov_beta <- vcov(fit_vb_CP)
+  sim_beta <- MASS::mvrnorm(1, beta, vcov_beta)
+  Linf_sim * (1 - exp(-K_sim * (newdata_CP$Age - t0_sim)))
+}
+
+boot_CP <- replicate(1000, boot_predict_CP())
+pred_CP$lower <- apply(boot_CP, 1, quantile, 0.025)
+pred_CP$upper <- apply(boot_CP, 1, quantile, 0.975)
+
+pred_all <- bind_rows(pred_OR, pred_CP)
+
+# Generate predictions for ages 0-2 (quadratic)
+early_pred <- expand.grid(
+  Age = seq(0, 2, length.out = 100),
+  Site = factor(c("OR", "CP"), levels = c("OR", "CP"))
+)
+
+pred_with_ci <- predict(early_model_quad, newdata = early_pred, 
+                        interval = "confidence", level = 0.95)
+early_pred$FSVLAFTER <- pred_with_ci[, "fit"]
+early_pred$lower <- pred_with_ci[, "lwr"]
+early_pred$upper <- pred_with_ci[, "upr"]
+
+# Extract asymptote values
+Linf_OR <- fixef(fit_vb_OR)["Linf"]
+Linf_CP <- fixef(fit_vb_CP)["Linf"]
+
+# Recode site labels to match other panels
+growth_data_plot <- growth_data_all %>%
+  mutate(site = recode(SITE., 
+                       "CP" = "Cool highland",
+                       "OR" = "Warm lowland"))
+
+early_pred <- early_pred %>%
+  mutate(site = recode(Site,
+                       "CP" = "Cool highland",
+                       "OR" = "Warm lowland"))
+
+pred_all <- pred_all %>%
+  mutate(site = recode(Site,
+                       "CP" = "Cool highland",
+                       "OR" = "Warm lowland"))
+
+# Create plot
+p_growth <- ggplot() +
+  # Raw data - ALL AGES
+  geom_jitter(data = growth_data_plot, 
+              aes(x = Age, y = FSVLAFTER, colour = site),
+              width = 0.15, height = 0, alpha = 0.3, size = 0.5) +
+  # Quadratic predictions for ages 0-2
+  geom_line(data = early_pred, 
+            aes(x = Age, y = FSVLAFTER, colour = site), 
+            linewidth = 1.2) +
+  geom_ribbon(data = early_pred, 
+              aes(x = Age, ymin = lower, ymax = upper, fill = site), 
+              alpha = 0.2) +
+  # Von Bertalanffy predictions for ages 2+
+  geom_line(data = pred_all, 
+            aes(x = Age, y = FSVLAFTER, colour = site), 
+            linewidth = 1.2) +
+  geom_ribbon(data = pred_all, 
+              aes(x = Age, ymin = lower, ymax = upper, fill = site), 
+              alpha = 0.2) +
+  # Asymptote lines
+  geom_hline(yintercept = Linf_OR, 
+             colour = "coral1", linetype = "dashed", linewidth = 0.6) +
+  geom_hline(yintercept = Linf_CP, 
+             colour = "cornflowerblue", linetype = "dashed", linewidth = 0.6) +
+  scale_x_continuous(breaks = seq(0, 12, by = 2), limits = c(0, 12)) +
+  scale_colour_manual(values = site_colors) +
+  scale_fill_manual(values = site_colors) +
+  labs(x = "Age (years)", y = "Snout-vent length (mm)") +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_growth
+
+# ============== PANEL B: Cumulative offspring ==============
+# Prepare data
+cumulative_data <- data %>%
+  arrange(indID, Age) %>%
+  group_by(indID, site) %>%
+  mutate(
+    cumulative_offspring = cumsum(nOffspring),
+    reproductive_event = row_number()
+  ) %>%
+  ungroup() %>%
+  filter(Age >= 2 & Age <= 12) %>%  # Filter to stable age range
+  mutate(site = recode(site,
+                       "CP" = "Cool highland",
+                       "OR" = "Warm lowland"))
+
+# Calculate population means and CIs
+cumulative_summary <- cumulative_data %>%
+  group_by(site, Age) %>%
+  summarise(
+    mean_cumulative = mean(cumulative_offspring),
+    se = sd(cumulative_offspring) / sqrt(n()),
+    lower_ci = mean_cumulative - 1.96 * se,
+    upper_ci = mean_cumulative + 1.96 * se,
+    .groups = 'drop')
+
+p_cumulative <- ggplot() +
+  geom_line(data = cumulative_data, 
+            aes(x = Age, y = cumulative_offspring, 
+                group = indID, color = site),
+            alpha = 0.2, linewidth = 0.3) +
+  geom_ribbon(data = cumulative_summary,
+              aes(x = Age, ymin = lower_ci, ymax = upper_ci, fill = site),
+              alpha = 0.3) +
+  geom_line(data = cumulative_summary,
+            aes(x = Age, y = mean_cumulative, color = site),
+            linewidth = 1.5) +
+  scale_color_manual(values = site_colors) +
+  scale_fill_manual(values = site_colors) +
+  scale_x_continuous(breaks = seq(2, 12, 2)) +
+  scale_y_continuous(breaks = seq(0, 55, 10)) +
+  labs(x = "Age (years)", y = "Cumulative offspring") +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_cumulative
+
+# ============== PANEL C: Fertility trajectories (BaFTA) ==============
+p_fertility <- ggplot(fert_data, aes(x = age, y = median, color = site, fill = site)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors) +
+  scale_fill_manual(values = site_colors) +
+  scale_x_continuous(breaks = seq(2, 12, 2), limits = c(2, 12)) +
+  labs(y = "Expected litter size", x = "Age (years)") +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_fertility
+
+# ============== PANEL D: Mortality hazard (BaSTA) ==============
+# Define trajectory extraction function
+calculate_trajectories_from_mcmc <- function(basta_out, site_name, ages = 2:14) {
+  params <- as.data.frame(basta_out$params)
+  
+  trajectories <- lapply(1:nrow(params), function(i) {
+    b0 <- params$b0[i]
+    b1 <- params$b1[i]
+    c <- params$c[i]
+    
+    hazard <- exp(b0 + b1 * ages) + c
+    
+    data.frame(
+      iteration = i,
+      age = ages,
+      hazard = hazard,
+      site = site_name
+    )
+  })
+  
+  all_traj <- bind_rows(trajectories)
+  
+  hazard_summary <- all_traj %>%
+    group_by(age, site) %>%
+    summarise(
+      median = median(hazard),
+      lower = quantile(hazard, 0.025),
+      upper = quantile(hazard, 0.975),
+      .groups = 'drop'
+    )
+  
+  list(hazard = hazard_summary)
+}
+
+# Extract trajectories from BaSTA outputstraj_OR_GM <- calculate_trajectories_from_mcmc(out_OR_GM, "Warm lowland")
+traj_CP <- calculate_trajectories_from_mcmc(out_CP, "Cool highland")
+haz_data <- bind_rows(traj_OR_GM$hazard, traj_CP$hazard)
+
+p_mortality <- ggplot(haz_data, aes(x = age, y = median, color = site, fill = site)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors) +
+  scale_fill_manual(values = site_colors) +
+  scale_x_continuous(breaks = seq(2, 12, 2), limits = c(2, 12)) +
+  labs(x = "Age (years)", y = "Mortality hazard μ(x)") +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_mortality
+
+# ============== PANEL E: BaFTA parameter densities ==============
+p_bafta_params <- ggplot(params_combined, aes(x = value, fill = site, color = site)) +
+  geom_density(alpha = 0.4, linewidth = 1) +
+  facet_wrap(~parameter, scales = "free", ncol = 1,
+             labeller = labeller(parameter = c(
+               "b0" = "b₀ (baseline fertility)",
+               "b3" = "b₃ (senescence rate)"))) +
+  scale_fill_manual(values = site_colors) +
+  scale_color_manual(values = site_colors) +
+  labs(x = "Parameter value", y = "Posterior density") +
+  theme_publication +
+  theme(legend.position = "none",
+        strip.background = element_blank(),
+        strip.text = element_text(size = 10, hjust = 0))
+
+p_bafta_params
+
+# ============== PANEL F: Reproductive value ==============
+# Reproductive value v(x) = (1/l(x)) * sum[l(a) * m(a)] for a >= x
+# Requires: lx from BaSTA life tables + expected fecundity from BaFTA
+
+# Extract lx from life tables (ages 2-12)
+lx_OR <- out_OR_WE_final$lifeTable$noCov$Mean %>%
+  filter(Ages >= 2, Ages <= 12) %>%
+  select(age = Ages, lx)
+
+lx_CP <- out_CP_GM_final$lifeTable$noCov$Mean %>%
+  filter(Ages >= 2, Ages <= 12) %>%
+  select(age = Ages, lx)
+
+# Extract expected fecundity from BaFTA (mean fertility at each age)
+mx_OR <- data.frame(
+  age = out_CM_OR$x,
+  mx  = out_CM_OR$fert[, "Mean"]) %>%
+  filter(age >= 2, age <= 12)
+
+mx_CP <- data.frame(
+  age = out_CM_CP$x,
+  mx  = out_CM_CP$fert[, "Mean"]) %>%
+  filter(age >= 2, age <= 12)
+
+calc_repro_value_smooth <- function(lx_df, mx_df, site_name, age_step = 0.1) {
+  
+# Interpolate lx and mx to finer age grid
+  ages_fine <- seq(2, 12, by = age_step)
+  
+  lx_smooth <- spline(lx_df$age, lx_df$lx, xout = ages_fine)$y
+  lx_smooth <- pmax(0, lx_smooth)  # prevent negative values
+  
+  mx_smooth <- spline(mx_df$age, mx_df$mx, xout = ages_fine)$y
+  mx_smooth <- pmax(0, mx_smooth)  # prevent negative values
+  
+# Calculate reproductive value on fine grid
+  rv <- sapply(seq_along(ages_fine), function(i) {
+    future <- seq(i, length(ages_fine))
+    sum(lx_smooth[future] * mx_smooth[future]) / lx_smooth[i]
+  })
+  
+  data.frame(age = ages_fine, rv = rv, site = site_name)
+}
+
+rv_OR <- calc_repro_value_smooth(lx_OR, mx_OR, "Warm lowland")
+rv_CP <- calc_repro_value_smooth(lx_CP, mx_CP, "Cool highland")
+rv_data <- bind_rows(rv_OR, rv_CP)
+
+
+# Plot
+p_repro_value <- ggplot(rv_data, aes(x = age, y = rv, color = site)) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors) +
+  scale_x_continuous(breaks = seq(2, 12, 2)) +
+  labs(x = "Age (years)", y = "Reproductive value") +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_repro_value
+
+# ============== COMBINE ALL PANELS ==============
+fig_combined <- plot_grid(
+  p_growth, p_cumulative,
+  p_fertility, p_mortality,
+  p_bafta_params, p_basta_params,
+  ncol = 2,
+  nrow = 3,
+  labels = c("A", "B", "C", "D", "E", "F"),
+  label_size = 14,
+  rel_widths = c(1.2, 1))
+
+fig_combined
+
+# Save
+ggsave("Figure_comprehensive_six_panel.png", 
+       fig_combined,
+       width = 10, height = 12, 
+       units = "in",
+       dpi = 600)
+
+ggsave("Figure_comprehensive_six_panel.pdf", 
+       fig_combined,
+       width = 10, height = 12, 
+       units = "in")
+```
+
+---
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```

@@ -1,0 +1,615 @@
+---
+title: "Reproductive_senescence_BaFTA"
+author: "Luisa Fitzpatrick"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: show
+    theme: flatly
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 6)
+```
+
+# Setup
+
+## Load packages
+
+```{r packages}
+library(tidyverse)
+library(cowplot)
+library(ggplot2)
+library(gridExtra)
+library(snowfall)
+library(BaFTA)
+library(flextable)
+library(officer)
+```
+
+## Load and prepare data
+
+```{r load-data}
+# Load data
+data <- read.csv(file = "OcellatusNatPop_FullDataset_2025.csv", 
+                 na = c("", "NA", ".", "?")
+)[ ,c('Year', 'FemID', 'Site', 'Age', 'Clutch')]
+
+# Rename columns
+data <- data %>%
+  rename(
+    year = Year,
+    indID = FemID,
+    site = Site,
+    nOffspring = Clutch)
+
+# Format variables
+data$indID <- as.factor(data$indID)
+data$site <- as.factor(data$site)
+data$Age <- as.integer(data$Age)
+data$nOffspring <- as.integer(data$nOffspring)
+
+# Remove missing data
+data <- subset(data,
+              !is.na(indID) & indID != 0 &
+              !is.na(Age) & Age != 0 &
+              !is.na(nOffspring) & nOffspring != 0)  # n = 1898
+
+head(data)
+```
+
+## Subset by population
+
+```{r subset-data}
+dataCP <- subset(data, site == "CP")
+dataOR <- subset(data, site == "OR")
+
+cat("CP sample size:", nrow(dataCP), "\n")
+cat("OR sample size:", nrow(dataOR), "\n")
+```
+
+# Visualize raw data
+
+```{r raw-data-plots}
+# CP population
+p_raw_CP <- ggplot(dataCP, aes(x = Age, y = nOffspring)) +
+  geom_point(alpha = 0.3, color = "cornflowerblue") +
+  stat_summary(fun = mean, geom = "line", color = "cornflowerblue", size = 1) +
+  labs(title = "Cool Highlands (CP)", x = "Age (years)", y = "Litter size") +
+  theme_minimal()
+
+# OR population
+p_raw_OR <- ggplot(dataOR, aes(x = Age, y = nOffspring)) +
+  geom_point(alpha = 0.3, color = "coral") +
+  stat_summary(fun = mean, geom = "line", color = "coral", size = 1) +
+  labs(title = "Warm Lowlands (OR)", x = "Age (years)", y = "Litter size") +
+  theme_minimal()
+
+# Display
+plot_grid(p_raw_CP, p_raw_OR, ncol = 2)
+```
+
+**Pattern:** Both populations show early increase then plateau, possibly decrease at old ages.
+
+---
+
+# Model Fitting - CP Population
+
+## CP: Quadratic model
+
+```{r bafta-cp-quad, eval=FALSE}
+# Run model (long computation)
+set.seed(123)
+
+out_quad_CP <- bafta(object = dataCP, model = "quadratic",
+                     dataType = "indivSimple", nsim = 4, ncpus = 4,
+                     niter = 50000, burnin = 10000, thinning = 50)
+
+# Save output
+dir.create("bafta_outputs", showWarnings = FALSE)
+saveRDS(out_quad_CP, "bafta_outputs/out_quad_CP.rds")
+```
+
+```{r load-cp-quad}
+# Load saved model
+out_quad_CP <- readRDS("bafta_outputs/out_quad_CP.rds")
+out_quad_CP
+```
+
+**Results:**
+- Convergence: All parameter chains converged
+- DIC = 4127.8
+- Predictive loss: Good (Fit = 1310, Penalty = 4467, Deviance = 5777)
+- Smallest Neff = 134 Critically low (should be over 400) - parameter estimates unreliable
+
+```{r plot-cp-quad}
+# Diagnostic plots
+plot(out_quad_CP)
+plot(out_quad_CP, type = "fertility")
+plot(out_quad_CP, type = "predictive")
+```
+
+## CP: Gamma model
+
+```{r bafta-cp-gamma, eval=FALSE}
+# Run model (long computation)
+set.seed(123)
+
+out_gamma_CP <- bafta(object = dataCP, model = "gamma",
+                      dataType = "indivSimple", nsim = 4, ncpus = 4,
+                      niter = 50000, burnin = 10000, thinning = 50)
+
+# Save output
+saveRDS(out_gamma_CP, "bafta_outputs/out_gamma_CP.rds")
+```
+
+```{r load-cp-gamma}
+# Load saved model
+out_gamma_CP <- readRDS("bafta_outputs/out_gamma_CP.rds")
+out_gamma_CP
+```
+
+**Results:**
+- Convergence: All parameter chains converged 
+- DIC = 4233.58
+- Predictive loss: Good (Fit = 1538, Penalty = 4359, Deviance = 5897)
+- Smallest Neff = 759 - OK
+
+```{r plot-cp-gamma}
+# Diagnostic plots
+plot(out_gamma_CP)
+plot(out_gamma_CP, type = "fertility") #not good
+plot(out_gamma_CP, type = "predictive")
+```
+
+## CP: Colchero-Muller model
+
+```{r bafta-cp-cm, eval=FALSE}
+# Run model (long computation)
+set.seed(123)
+
+out_CM_CP <- bafta(object = dataCP, model = "ColcheroMuller",
+                   dataType = "indivSimple", nsim = 4, ncpus = 4,
+                   niter = 50000, burnin = 10000, thinning = 50)
+
+# Save output
+saveRDS(out_CM_CP, "bafta_outputs/out_CM_CP.rds")
+```
+
+```{r load-cp-cm}
+# Load saved model
+out_CM_CP <- readRDS("bafta_outputs/out_CM_CP.rds")
+out_CM_CP
+```
+
+**Results:**
+- Convergence: All parameter chains converged 
+- DIC = 4130.45
+- Predictive loss: Good (Fit = 1313, Penalty = 4469, Deviance = 5782)
+- Smallest Neff = 427 - OK 
+
+```{r plot-cp-cm}
+# Diagnostic plots
+plot(out_CM_CP)
+plot(out_CM_CP, type = "fertility")
+plot(out_CM_CP, type = "predictive")
+```
+
+## CP Model comparison
+
+**Best model for CP:** Colchero-Muller (DIC = 4130.45)
+- DIC 2.65 units from quadratic (which had very low neff for b2)
+- Visually, both quadratic and CM fit data well
+- CM model preferred due to better convergence
+
+---
+
+# Model Fitting - OR Population
+
+## OR: Quadratic model
+
+```{r bafta-or-quad, eval=FALSE}
+# Run model (long computation)
+set.seed(123)
+
+out_quad_OR <- bafta(object = dataOR, model = "quadratic",
+                     dataType = "indivSimple", nsim = 4, ncpus = 4,
+                     niter = 50000, burnin = 10000, thinning = 50)
+
+# Save output
+saveRDS(out_quad_OR, "bafta_outputs/out_quad_OR.rds")
+```
+
+```{r load-or-quad}
+# Load saved model
+out_quad_OR <- readRDS("bafta_outputs/out_quad_OR.rds")
+out_quad_OR
+```
+
+**Results:**
+- Convergence: All parameter chains converged 
+- DIC = 2223.56
+- Predictive loss: Good (Fit = 527, Penalty = 1862, Deviance = 2389)
+- Smallest Neff = 750 - Good 
+
+```{r plot-or-quad}
+# Diagnostic plots
+plot(out_quad_OR)
+plot(out_quad_OR, type = "fertility")
+plot(out_quad_OR, type = "predictive")
+```
+
+## OR: Gamma model
+
+```{r bafta-or-gamma, eval=FALSE}
+# Run model (long computation)
+set.seed(123)
+
+out_gamma_OR <- bafta(object = dataOR, model = "gamma",
+                      dataType = "indivSimple", nsim = 4, ncpus = 4,
+                      niter = 50000, burnin = 10000, thinning = 50)
+
+# Save output
+saveRDS(out_gamma_OR, "bafta_outputs/out_gamma_OR.rds")
+```
+
+```{r load-or-gamma}
+# Load saved model
+out_gamma_OR <- readRDS("bafta_outputs/out_gamma_OR.rds")
+out_gamma_OR
+```
+
+**Results:**
+- Convergence: All parameter chains converged 
+- DIC = 2269.11
+- Predictive loss: Good (Fit = 593, Penalty = 1806, Deviance = 2399)
+- Smallest Neff = 873 - OK 
+
+```{r plot-or-gamma}
+# Diagnostic plots
+plot(out_gamma_OR)
+plot(out_gamma_OR, type = "fertility") # not good
+plot(out_gamma_OR, type = "predictive")
+```
+
+## OR: Colchero-Muller model
+
+```{r bafta-or-cm, eval=FALSE}
+# Run model (long computation)
+set.seed(123)
+
+out_CM_OR <- bafta(object = dataOR, model = "ColcheroMuller",
+                   dataType = "indivSimple", nsim = 4, ncpus = 4,
+                   niter = 50000, burnin = 10000, thinning = 50)
+
+# Save output
+saveRDS(out_CM_OR, "bafta_outputs/out_CM_OR.rds")
+```
+
+```{r load-or-cm}
+# Load saved model
+out_CM_OR <- readRDS("bafta_outputs/out_CM_OR.rds")
+out_CM_OR
+```
+
+**Results:**
+- Convergence: All parameter chains converged 
+- DIC = 2226.87
+- Predictive loss: Good (Fit = 530, Penalty = 1862, Deviance = 2393)
+- Smallest Neff = 526 - OK 
+
+```{r plot-or-cm}
+# Diagnostic plots
+plot(out_CM_OR)
+plot(out_CM_OR, type = "fertility")
+plot(out_CM_OR, type = "predictive")
+```
+
+## OR Model comparison
+
+**Best model for OR:** Quadratic (DIC = 2223.56)
+- DIC 3.31 units lower than CM model
+- Visually best fit, but CM is also good - just poor fit at ages with low data
+- CM model preferred for direct comparison with CP
+
+---
+
+# Final Model Selection
+
+**Decision:** Use **Colchero-Muller model for both populations** to allow direct comparison of parameters across populations.
+
+BaFTA results support previous modeling:
+- No real difference in litter size trajectories between sites
+- No evidence of senescence, rather increase and plateau pattern
+
+---
+
+# Extract Fertility Predictions
+
+```{r extract-fertility}
+# CP population
+fert_CP <- data.frame(
+  Age = out_CM_CP$x,
+  Mean = out_CM_CP$fert[, "Mean"],
+  Lower = out_CM_CP$fert[, "Lower"],
+  Upper = out_CM_CP$fert[, "Upper"],
+  Population = "Cool Highlands (CP)"
+)
+
+# OR population
+fert_OR <- data.frame(
+  Age = out_CM_OR$x,
+  Mean = out_CM_OR$fert[, "Mean"],
+  Lower = out_CM_OR$fert[, "Lower"],
+  Upper = out_CM_OR$fert[, "Upper"],
+  Population = "Warm Lowlands (OR)"
+)
+
+# Combine
+fert_combined <- rbind(fert_CP, fert_OR)
+```
+
+---
+
+# Visualization
+
+## Fertility trajectories only
+
+```{r plot-fertility-only}
+ggplot(fert_combined, aes(x = Age, y = Mean, color = Population, fill = Population)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = Lower, ymax = Upper), alpha = 0.2, color = NA) +
+  scale_color_manual(values = c("Cool Highlands (CP)" = "cornflowerblue", 
+                                "Warm Lowlands (OR)" = "coral")) +
+  scale_fill_manual(values = c("Cool Highlands (CP)" = "cornflowerblue", 
+                               "Warm Lowlands (OR)" = "coral")) +
+  labs(x = "Age (years)", 
+       y = "Expected litter size",
+       color = "Population",
+       fill = "Population") +
+  theme_classic() +
+  theme(legend.position = "top")
+
+# Save
+ggsave("fertility_comparison.pdf", width = 7, height = 5)
+ggsave("fertility_comparison.png", width = 7, height = 5)
+```
+
+## Fertility trajectories with raw data
+
+```{r plot-fertility-with-data}
+ggplot() +
+  # Raw data points (semi-transparent)
+  geom_jitter(data = dataCP, aes(x = Age, y = nOffspring), 
+             color = "cornflowerblue", alpha = 0.2, size = 1) +
+  geom_jitter(data = dataOR, aes(x = Age, y = nOffspring), 
+             color = "coral", alpha = 0.2, size = 1) +
+  # Fitted curves with confidence intervals
+  geom_ribbon(data = fert_combined, 
+              aes(x = Age, ymin = Lower, ymax = Upper, fill = Population), 
+              alpha = 0.3) +
+  geom_line(data = fert_combined, 
+            aes(x = Age, y = Mean, color = Population), 
+            size = 1.2) +
+  scale_color_manual(values = c("Cool Highlands (CP)" = "cornflowerblue", 
+                                "Warm Lowlands (OR)" = "coral")) +
+  scale_fill_manual(values = c("Cool Highlands (CP)" = "cornflowerblue", 
+                               "Warm Lowlands (OR)" = "coral")) +
+  labs(x = "Age (years)", 
+       y = "Litter size",
+       color = "Population",
+       fill = "Population") +
+  theme_classic() +
+  theme(legend.position = "top")
+```
+
+## Publication figure with parameter densities
+
+```{r publication-figure}
+# Define colors and theme
+site_colors <- c("Warm lowland" = "coral1", "Cool highland" = "cornflowerblue")
+
+theme_publication <- theme_classic(base_size = 12) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.line = element_line(color = "black"),
+    plot.margin = margin(10, 10, 10, 10))
+
+# ============== EXTRACT FERTILITY TRAJECTORIES ==============
+fert_OR <- data.frame(
+  age = out_CM_OR$x,
+  median = out_CM_OR$fert[, "Mean"],
+  lower = out_CM_OR$fert[, "Lower"],
+  upper = out_CM_OR$fert[, "Upper"],
+  site = "Warm lowland"
+)
+
+fert_CP <- data.frame(
+  age = out_CM_CP$x,
+  median = out_CM_CP$fert[, "Mean"],
+  lower = out_CM_CP$fert[, "Lower"],
+  upper = out_CM_CP$fert[, "Upper"],
+  site = "Cool highland"
+)
+
+fert_data <- bind_rows(fert_OR, fert_CP)
+
+# ============== EXTRACT KEY PARAMETER POSTERIORS ==============
+params_OR <- as.data.frame(out_CM_OR$theta) %>%
+  mutate(site = "Warm lowland")
+params_CP <- as.data.frame(out_CM_CP$theta) %>%
+  mutate(site = "Cool highland")
+
+# Focus on key parameters only (b0 = peak fertility, b3 = senescence rate)
+params_combined <- bind_rows(params_OR, params_CP) %>%
+  pivot_longer(cols = c(b0, b3),
+               names_to = "parameter", 
+               values_to = "value")
+
+# ============== PANEL A: FERTILITY TRAJECTORIES ==============
+p_fertility <- ggplot(fert_data, aes(x = age, y = median, color = site, fill = site)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors) +
+  scale_fill_manual(values = site_colors) +
+  scale_x_continuous(breaks = seq(2, 12, 2), limits = c(2, 12)) +
+  labs(y = "Expected litter size", x = "Age (years)") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# ============== PANEL B: KEY PARAMETER DISTRIBUTIONS ==============
+p_params <- ggplot(params_combined, aes(x = value, fill = site, color = site)) +
+  geom_density(alpha = 0.4, linewidth = 1) +
+  facet_wrap(~parameter, scales = "free", ncol = 1,
+             labeller = labeller(parameter = c(
+               "b0" = "b0 (baseline fertility)",
+               "b3" = "b3 (senescence rate)"))) +
+  scale_fill_manual(values = site_colors) +
+  scale_color_manual(values = site_colors) +
+  labs(x = "Parameter value", y = "Posterior density") +
+  theme_publication +
+  theme(legend.position = "none",
+        strip.background = element_blank(),
+        strip.text = element_text(size = 10, hjust = 0))
+
+# ============== COMBINE PANELS ==============
+combined_figure <- plot_grid(
+  p_fertility, p_params,
+  ncol = 1,
+  labels = c("C", "E"),
+  label_size = 14,
+  rel_widths = c(1, 1))
+
+combined_figure
+
+# ============== SAVE ==============
+ggsave("Figure_fertility_and_parameters.png", 
+       combined_figure,
+       width = 10, height = 5,
+       units = "in",
+       dpi = 600)
+
+ggsave("Figure_fertility_and_parameters.pdf", 
+       combined_figure,
+       width = 10, height = 5,
+       units = "in")
+```
+
+---
+
+# Extract and Export Coefficients
+
+```{r extract-coefficients}
+# Extract coefficient tables
+coef_CP <- out_CM_CP$coefficients
+coef_OR <- out_CM_OR$coefficients
+
+# View them
+print("CP coefficients:")
+print(coef_CP)
+
+print("OR coefficients:")
+print(coef_OR)
+```
+
+## Create coefficient table for Word
+
+```{r coefficient-table}
+# Function to round to significant figures
+signif_format <- function(x, digits = 3) {
+  signif(x, digits)
+}
+
+# Create a combined dataframe with UNIQUE column names
+coef_table <- data.frame(
+  Parameter = rownames(coef_CP),
+  CP_Mean = signif_format(coef_CP[, "Mean"]),
+  CP_SD = signif_format(coef_CP[, "SD"]),
+  CP_Lower = signif_format(coef_CP[, "Lower"]),
+  CP_Upper = signif_format(coef_CP[, "Upper"]),
+  OR_Mean = signif_format(coef_OR[, "Mean"]),
+  OR_SD = signif_format(coef_OR[, "SD"]),
+  OR_Lower = signif_format(coef_OR[, "Lower"]),
+  OR_Upper = signif_format(coef_OR[, "Upper"])
+)
+
+# Create flextable
+ft <- flextable(coef_table) %>%
+  set_header_labels(
+    Parameter = "Parameter",
+    CP_Mean = "Mean",
+    CP_SD = "SD",
+    CP_Lower = "Lower 95% CI",
+    CP_Upper = "Upper 95% CI",
+    OR_Mean = "Mean",
+    OR_SD = "SD",
+    OR_Lower = "Lower 95% CI",
+    OR_Upper = "Upper 95% CI"
+  ) %>%
+  add_header_row(
+    values = c("", "Cool Highlands (CP)", "Warm Lowlands (OR)"),
+    colwidths = c(1, 4, 4)
+  ) %>%
+  align(align = "center", part = "all") %>%
+  align(j = 1, align = "left", part = "body") %>%
+  bold(part = "header") %>%
+  fontsize(size = 10, part = "all") %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  border_outer(border = fp_border(width = 2), part = "all") %>%
+  border_inner_h(border = fp_border(width = 1), part = "all") %>%
+  border_inner_v(border = fp_border(width = 1), part = "all") %>%
+  autofit()
+
+ft
+
+# Save to Word document
+save_as_docx(ft, path = "BaFTA_coefficients.docx")
+
+# Also print to console
+print(coef_table)
+```
+
+---
+
+# Model Comparison Table
+
+```{r model-comparison-table}
+# Create model comparison table
+model_comparison <- data.frame(
+  Population = rep(c("Cool Highlands", "Warm Lowlands"), each = 3),
+  Model = rep(c("Quadratic", "Gamma", "Colchero-Muller"), 2),
+  DIC = c(4128.42, 4237.65, 4129.03,  # CP
+          2223.60, 2269.45, 2226.09),  # OR
+  Predictive_Loss = c(5778, 5894, 5779,  # CP
+                      2385, 2396, 2394),  # OR
+  Converged = c("No", "Yes", "Yes",  # CP
+                "Yes", "Yes", "Yes")   # OR
+)
+
+# Display
+knitr::kable(model_comparison, caption = "Model comparison for both populations")
+
+# Save as supplementary table
+ft_models <- flextable(model_comparison) %>%
+  set_header_labels(
+    Population = "Population",
+    Model = "Model",
+    DIC = "DIC",
+    Predictive_Loss = "Predictive Loss",
+    Converged = "Convergence"
+  ) %>%
+  bold(part = "header") %>%
+  autofit()
+
+save_as_docx(ft_models, path = "Supplementary_Table_ModelComparison.docx")
+
+ft_models
+```
+
+
+

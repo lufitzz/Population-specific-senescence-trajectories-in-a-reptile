@@ -1,0 +1,587 @@
+---
+title: "Growth Curve Analysis 2025"
+author: "Luisa Fitzpatrick"
+date: "r Sys.Date()"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r load-packages, message = FALSE, warning = FALSE}
+library(nlme)
+library(ggplot2)
+library(knitr)
+library(dplyr)
+# Note: MASS is used via MASS::mvrnorm() in the bootstrap functions
+```
+
+## Prepare data
+```{r}
+# Read and filter to ages 2+
+growth_data <- read.csv("Growthcurvedata.csv", 
+                        na.strings = c("", ",", "NA", "."), 
+                        header = TRUE)
+
+growth_data <- growth_data %>% 
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), 
+         !is.na(Age), !is.na(FEMID.),
+         Age >= 2)  # Adults only
+
+# Check sample sizes
+table(growth_data$Age, growth_data$SITE.)
+
+# Separate by site
+growth_data_OR <- growth_data %>% filter(SITE. == "OR")
+growth_data_CP <- growth_data %>% filter(SITE. == "CP")
+```
+
+## Summary statistics
+```{r}
+# Summary statistics for growth data
+summary_stats <- tibble(
+  Population = c("Overall", "Warm lowland (OR)", "Cool highland (CP)"),
+  Observations = c(nrow(growth_data), nrow(growth_data_OR), nrow(growth_data_CP)),
+  Individuals = c(length(unique(growth_data$FEMID.)),
+                  length(unique(growth_data_OR$FEMID.)),
+                  length(unique(growth_data_CP$FEMID.))),
+  Age_min = c(min(growth_data$Age), min(growth_data_OR$Age), min(growth_data_CP$Age)),
+  Age_max = c(max(growth_data$Age), max(growth_data_OR$Age), max(growth_data_CP$Age)),
+  Mean_obs_per_ind = c(
+    round(mean(table(growth_data$FEMID.)), 1),
+    round(mean(table(growth_data_OR$FEMID.)), 1),
+    round(mean(table(growth_data_CP$FEMID.)), 1)),
+  Obs_range_per_ind = c(
+    paste0(min(table(growth_data$FEMID.)), "-", max(table(growth_data$FEMID.))),
+    paste0(min(table(growth_data_OR$FEMID.)), "-", max(table(growth_data_OR$FEMID.))),
+    paste0(min(table(growth_data_CP$FEMID.)), "-", max(table(growth_data_CP$FEMID.)))))
+
+kable(summary_stats, digits = 1, 
+      caption = "Summary statistics for growth data")
+
+```
+
+## Fit mixed effects von Bertalanffy models (with random effect on Linf)
+```{r}
+# ORFORD
+fit_vb_OR <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+summary(fit_vb_OR)
+intervals(fit_vb_OR)  # 95% CIs for fixed effects
+
+# CENTRAL PLATEAU
+fit_vb_CP <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+summary(fit_vb_CP)
+intervals(fit_vb_CP)
+```
+
+## Model diagnostics
+```{r}
+# Function to check model diagnostics
+check_nlme_diagnostics <- function(model, title) {
+  
+  par(mfrow = c(2, 2))
+  
+  # 1. Residuals vs Fitted
+  plot(fitted(model), residuals(model, type = "pearson"),
+       xlab = "Fitted values", ylab = "Pearson residuals",
+       main = paste(title, "- Residuals vs Fitted"))
+  abline(h = 0, col = "red", lty = 2)
+  lines(lowess(fitted(model), residuals(model, type = "pearson")), 
+        col = "blue", lwd = 2)
+  
+  # 2. QQ plot
+  qqnorm(residuals(model, type = "pearson"), 
+         main = paste(title, "- Normal Q-Q"))
+  qqline(residuals(model, type = "pearson"), col = "red")
+  
+  # 3. Scale-Location
+  plot(fitted(model), sqrt(abs(residuals(model, type = "pearson"))),
+       xlab = "Fitted values", ylab = "√|Pearson residuals|",
+       main = paste(title, "- Scale-Location"))
+  lines(lowess(fitted(model), sqrt(abs(residuals(model, type = "pearson")))), 
+        col = "blue", lwd = 2)
+  
+  # 4. Histogram of residuals
+  hist(residuals(model, type = "pearson"), breaks = 20,
+       main = paste(title, "- Residual Distribution"),
+       xlab = "Pearson residuals")
+  
+  par(mfrow = c(1, 1))
+  
+  # Shapiro test
+  cat("\n", title, "- Shapiro-Wilk test for normality:\n")
+  print(shapiro.test(residuals(model, type = "pearson")))
+}
+
+# Check diagnostics for both models
+check_nlme_diagnostics(fit_vb_OR, "OR")
+check_nlme_diagnostics(fit_vb_CP, "CP")
+
+# Random effects diagnostics
+par(mfrow = c(1, 2))
+qqnorm(ranef(fit_vb_OR)[,1], main = "OR - Random Effects Q-Q")
+qqline(ranef(fit_vb_OR)[,1], col = "red")
+qqnorm(ranef(fit_vb_CP)[,1], main = "CP - Random Effects Q-Q")
+qqline(ranef(fit_vb_CP)[,1], col = "red")
+par(mfrow = c(1, 1))
+
+# good residual diagnostics
+```
+
+## Fit logistic and Gompertz models and compare with VB
+```{r}
+# Logistic OR
+fit_log_OR <- nlme(
+  FSVLAFTER ~ Linf / (1 + exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.5, t0 = 1),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Logistic CP
+fit_log_CP <- nlme(
+  FSVLAFTER ~ Linf / (1 + exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.5, t0 = 1),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Gompertz OR
+fit_gomp_OR <- nlme(
+  FSVLAFTER ~ Linf * exp(-exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.5, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Gompertz CP
+fit_gomp_CP <- nlme(
+  FSVLAFTER ~ Linf * exp(-exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.5, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Compare AICs
+AIC(fit_vb_OR, fit_log_OR, fit_gomp_OR)
+AIC(fit_vb_CP, fit_log_CP, fit_gomp_CP)
+
+# VB fits both sites best (not much difference to others)
+```
+
+## Site comparison (combined model)
+```{r}
+# Combine datasets
+growth_data_both <- growth_data %>%
+  mutate(Site = factor(SITE.))
+
+# Fit model with site-specific parameters
+fit_combined <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_both,
+  fixed = list(Linf ~ Site, K ~ Site, t0 ~ Site),
+  random = Linf ~ 1 | FEMID.,
+  start = c(74, 15, 0.044, 0, 0, 0),  # Linf_OR, diff_CP, K_OR, diff_CP, t0_OR, diff_CP
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+summary(fit_combined)
+
+# Test if site effects are significant
+anova(fit_combined)
+
+## CP does have higher growth rate (K) 
+## plus larger asymptote
+# sligth difference between t0 
+
+# so CP has faster approach to asymptote than OR
+
+```
+
+## Visualise
+```{r}
+
+# Generate prediction data
+newdata_OR <- data.frame(Age = seq(2, 14, length.out = 100))
+newdata_CP <- data.frame(Age = seq(2, 14, length.out = 100))
+
+# Predict from models (population-level, fixed effects only)
+pred_OR <- newdata_OR %>%
+  mutate(
+    FSVLAFTER = predict(fit_vb_OR, newdata = newdata_OR, level = 0),
+    Site = "OR")
+
+pred_CP <- newdata_CP %>%
+  mutate(
+    FSVLAFTER = predict(fit_vb_CP, newdata = newdata_CP, level = 0),
+    Site = "CP")
+
+# For confidence intervals, use parametric bootstrap
+set.seed(123)
+
+# Bootstrap OR
+boot_predict_OR <- function() {
+  # Simulate new parameters from model
+  beta <- fixef(fit_vb_OR)
+  vcov_beta <- vcov(fit_vb_OR)
+  sim_beta <- MASS::mvrnorm(1, beta, vcov_beta)
+  
+  # Predict with simulated parameters
+  Linf_sim <- sim_beta[1]
+  K_sim <- sim_beta[2]
+  t0_sim <- sim_beta[3]
+  
+  Linf_sim * (1 - exp(-K_sim * (newdata_OR$Age - t0_sim)))
+}
+
+boot_OR <- replicate(1000, boot_predict_OR())
+pred_OR$lower <- apply(boot_OR, 1, quantile, 0.025)
+pred_OR$upper <- apply(boot_OR, 1, quantile, 0.975)
+
+# Bootstrap CP
+boot_predict_CP <- function() {
+  beta <- fixef(fit_vb_CP)
+  vcov_beta <- vcov(fit_vb_CP)
+  sim_beta <- MASS::mvrnorm(1, beta, vcov_beta)
+  
+  Linf_sim <- sim_beta[1]
+  K_sim <- sim_beta[2]
+  t0_sim <- sim_beta[3]
+  
+  Linf_sim * (1 - exp(-K_sim * (newdata_CP$Age - t0_sim)))
+}
+
+boot_CP <- replicate(1000, boot_predict_CP())
+pred_CP$lower <- apply(boot_CP, 1, quantile, 0.025)
+pred_CP$upper <- apply(boot_CP, 1, quantile, 0.975)
+
+# Combine predictions
+pred_all <- bind_rows(pred_OR, pred_CP)
+
+
+#FINAL PUBLICATION-QUALITY PLOT
+
+# Prepare data for plotting
+growth_data_plot <- growth_data %>%
+  mutate(Site = factor(SITE., levels = c("OR", "CP")))
+
+# Extract Linf values for horizontal lines
+Linf_OR <- fixef(fit_vb_OR)["Linf"]
+Linf_CP <- fixef(fit_vb_CP)["Linf"]
+
+# Create plot
+p_growth <- ggplot() +
+    geom_jitter(data = growth_data_plot, 
+              aes(x = Age, y = FSVLAFTER, colour = Site),
+              width = 0.15, height = 0, alpha = 0.3, size = 1.5) +
+    geom_line(data = pred_all, 
+            aes(x = Age, y = FSVLAFTER, colour = Site), 
+            linewidth = 1.2) +
+    geom_ribbon(data = pred_all, 
+              aes(x = Age, ymin = lower, ymax = upper, fill = Site), 
+              alpha = 0.2) +
+    geom_hline(yintercept = Linf_OR, 
+             colour = "coral1", linetype = "dashed", linewidth = 0.6) +
+  geom_hline(yintercept = Linf_CP, 
+             colour = "cornflowerblue", linetype = "dashed", linewidth = 0.6) +
+    scale_x_continuous(breaks = seq(2, 14, by = 2), limits = c(2, 14)) +
+  scale_colour_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  scale_fill_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+    labs(x = "Age (years)", 
+       y = "Snout-vent length (mm)") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+print(p_growth)
+
+
+ggsave("GrowthCurve.pdf", p_growth, 
+       width = 18, height = 13, units = "cm", dpi = 600)
+
+ggsave("GrowthCurve.png", p_growth, 
+       width = 18, height = 13, units = "cm", dpi = 600)
+
+```
+
+
+## Results table (supplementary material)
+```{r}
+results_table <- tibble(
+  Population = rep(c("Warm lowland (OR)", "Cool highland (CP)"), each = 3),
+  Parameter = rep(c("L∞ (mm)", "K (year⁻¹)", "t₀ (year)"), 2),
+  Estimate = c(fixef(fit_vb_OR), fixef(fit_vb_CP)),
+  Lower_95CI = c(intervals(fit_vb_OR)$fixed[,"lower"], intervals(fit_vb_CP)$fixed[,"lower"]),
+  Upper_95CI = c(intervals(fit_vb_OR)$fixed[,"upper"], intervals(fit_vb_CP)$fixed[,"upper"])) %>%
+  mutate(across(c(Estimate, Lower_95CI, Upper_95CI), ~round(., 3)))
+
+kable(results_table, caption = "Growth parameters and 95% CIs for each population")
+```
+
+
+
+## Extract key statistics for manuscript
+```{r}
+manuscript_stats <- tibble(
+  Population = c("Warm lowland (OR)", "Cool highland (CP)"),
+  Observations = c(nrow(growth_data_OR), nrow(growth_data_CP)),
+  Individuals = c(length(unique(growth_data_OR$FEMID.)), length(unique(growth_data_CP$FEMID.))),
+  SD_Random_Linf = c(as.numeric(VarCorr(fit_vb_OR)[1,2]), as.numeric(VarCorr(fit_vb_CP)[1,2])),
+  Residual_SD = c(fit_vb_OR$sigma, fit_vb_CP$sigma))
+
+kable(manuscript_stats, digits = 2, caption = "Sample sizes and model statistics for manuscript")
+
+```
+
+
+## Early growth comparison
+```{r}
+## Early growth comparison (ages 0-2 years) - pre-reproductive phase
+
+growth_data_all <- read.csv("Growthcurvedata.csv", 
+                        na.strings = c("", ",", "NA", "."), 
+                        header = TRUE)
+
+# Subset to early ages
+early_growth <- growth_data_all %>%
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), 
+         !is.na(Age), 
+         Age <= 2) %>%
+  mutate(Site = factor(SITE., levels = c("OR", "CP")))
+
+# Check sample sizes
+table(early_growth$Age, early_growth$Site)
+
+# Linear model with interaction to test if growth rates differ
+early_model <- lm(FSVLAFTER ~ Age * Site, data = early_growth)
+summary(early_model)
+
+# Extract coefficients
+coef_summary <- summary(early_model)$coefficients
+cat("\nInterpretation:\n")
+cat("OR growth rate (mm/year):", round(coef_summary["Age", "Estimate"], 2), "\n")
+cat("CP growth rate (mm/year):", round(coef_summary["Age", "Estimate"] + coef_summary["Age:SiteCP", "Estimate"], 2), "\n")
+cat("Difference:", round(coef_summary["Age:SiteCP", "Estimate"], 2), "\n")
+cat("P-value for difference:", round(coef_summary["Age:SiteCP", "Pr(>|t|)"], 4), "\n")
+
+# Visualize
+ggplot(early_growth, aes(x = Age, y = FSVLAFTER, color = Site)) +
+  geom_jitter(alpha = 0.3, width = 0.02) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1.5) +
+  scale_color_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  labs(x = "Age (years)", y = "SVL (mm)", 
+       title = "Early growth rates (ages 0-2)") +
+  theme_classic(base_size = 12)
+
+# early growth rates also differ
+
+# check quadratic
+# Compare linear vs polynomial
+early_model_quad <- lm(FSVLAFTER ~ poly(Age, 2) * Site, data = early_growth)
+AIC(early_model, early_model_quad)
+
+# Check the quadratic model
+summary(early_model_quad)
+
+# Visualize to see the curvature
+ggplot(early_growth, aes(x = Age, y = FSVLAFTER, color = Site)) +
+  geom_jitter(alpha = 0.3, width = 0.02) +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), 
+              se = TRUE, linewidth = 1.5) +
+  scale_color_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  labs(x = "Age (years)", y = "SVL (mm)", 
+       title = "Early growth: quadratic model (ages 0-2)") +
+  theme_classic(base_size = 12)
+
+summary(early_model_quad)
+
+# Check specific interactions
+anova(early_model_quad)
+
+
+# Linear interaction (poly(Age, 2)1:SiteCP): p < 2e-16 - CP's overall growth trajectory differs
+# Quadratic interaction (poly(Age, 2)2:SiteCP): p < 2e-16 - CP's curvature pattern differs
+# R² improved from 0.92 (linear) to 0.95 (quadratic)
+# CP grow faster AND they have a different growth acceleration pattern during ages 0-2.
+
+```
+
+
+## Visualise all ages for publication
+### von Bertalanffy growth curves fitted to post-reproductive individuals (age ≥2 years). Raw data shown for all ages including juveniles.
+```{r}
+## Publication figure with all ages shown
+
+# Generate predictions from nlme models (ages 2+)
+newdata_OR <- data.frame(Age = seq(2, 14, length.out = 100))
+newdata_CP <- data.frame(Age = seq(2, 14, length.out = 100))
+
+# Predict from models (population-level, fixed effects only)
+pred_OR <- newdata_OR %>%
+  mutate(
+    FSVLAFTER = predict(fit_vb_OR, newdata = newdata_OR, level = 0),
+    Site = "OR")
+
+pred_CP <- newdata_CP %>%
+  mutate(
+    FSVLAFTER = predict(fit_vb_CP, newdata = newdata_CP, level = 0),
+    Site = "CP")
+
+# Bootstrap for confidence intervals
+set.seed(123)
+
+boot_predict_OR <- function() {
+  beta <- fixef(fit_vb_OR)
+  vcov_beta <- vcov(fit_vb_OR)
+  sim_beta <- MASS::mvrnorm(1, beta, vcov_beta)
+  
+  Linf_sim <- sim_beta[1]
+  K_sim <- sim_beta[2]
+  t0_sim <- sim_beta[3]
+  
+  Linf_sim * (1 - exp(-K_sim * (newdata_OR$Age - t0_sim)))
+}
+
+boot_OR <- replicate(1000, boot_predict_OR())
+pred_OR$lower <- apply(boot_OR, 1, quantile, 0.025)
+pred_OR$upper <- apply(boot_OR, 1, quantile, 0.975)
+
+boot_predict_CP <- function() {
+  beta <- fixef(fit_vb_CP)
+  vcov_beta <- vcov(fit_vb_CP)
+  sim_beta <- MASS::mvrnorm(1, beta, vcov_beta)
+  
+  Linf_sim <- sim_beta[1]
+  K_sim <- sim_beta[2]
+  t0_sim <- sim_beta[3]
+  
+  Linf_sim * (1 - exp(-K_sim * (newdata_CP$Age - t0_sim)))
+}
+
+boot_CP <- replicate(1000, boot_predict_CP())
+pred_CP$lower <- apply(boot_CP, 1, quantile, 0.025)
+pred_CP$upper <- apply(boot_CP, 1, quantile, 0.975)
+
+# Combine predictions
+pred_all <- bind_rows(pred_OR, pred_CP)
+
+# Extract Linf values for horizontal lines
+Linf_OR <- fixef(fit_vb_OR)["Linf"]
+Linf_CP <- fixef(fit_vb_CP)["Linf"]
+
+# Prepare ALL growth data for plotting (ages 0-14)
+growth_data_plot <- growth_data_all %>%
+  mutate(Site = factor(SITE., levels = c("OR", "CP")))
+
+# Create plot
+p_growth <- ggplot() +
+  # Raw data points - ALL AGES
+  geom_jitter(data = growth_data_plot, 
+              aes(x = Age, y = FSVLAFTER, colour = Site),
+              width = 0.15, height = 0, alpha = 0.3, size = 1.5) +
+  # Fitted curves - AGES 2+ ONLY
+  geom_line(data = pred_all, 
+            aes(x = Age, y = FSVLAFTER, colour = Site), 
+            linewidth = 1.2) +
+  geom_ribbon(data = pred_all, 
+              aes(x = Age, ymin = lower, ymax = upper, fill = Site), 
+              alpha = 0.2) +
+  # Asymptote lines
+  geom_hline(yintercept = Linf_OR, 
+             colour = "coral1", linetype = "dashed", linewidth = 0.6) +
+  geom_hline(yintercept = Linf_CP, 
+             colour = "cornflowerblue", linetype = "dashed", linewidth = 0.6) +
+  scale_x_continuous(breaks = seq(0, 14, by = 2), limits = c(0, 14)) +
+  scale_colour_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  scale_fill_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  labs(x = "Age (years)", 
+       y = "Snout-vent length (mm)") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+print(p_growth)
+
+
+## Add quadratic predictions for ages 0-2 to the growth curve plot
+
+# Generate predictions from quadratic model for early ages
+early_pred <- expand.grid(
+  Age = seq(0, 2, length.out = 100),
+  Site = factor(c("OR", "CP"), levels = c("OR", "CP"))
+)
+
+# Predict with confidence intervals
+early_pred <- early_pred %>%
+  mutate(
+    FSVLAFTER = predict(early_model_quad, newdata = early_pred),
+    # Get prediction intervals
+    pred_interval = predict(early_model, newdata = early_pred, 
+                           interval = "confidence", level = 0.95)
+  )
+
+# Extract confidence intervals properly
+pred_with_ci <- predict(early_model_quad, newdata = early_pred, 
+                       interval = "confidence", level = 0.95)
+early_pred$lower <- pred_with_ci[, "lwr"]
+early_pred$upper <- pred_with_ci[, "upr"]
+early_pred$pred_interval <- NULL
+
+# add to plot
+p_growth <- ggplot() +
+  # Raw data - ALL AGES
+  geom_jitter(data = growth_data_plot, 
+              aes(x = Age, y = FSVLAFTER, colour = Site),
+              width = 0.15, height = 0, alpha = 0.3, size = 1.5) +
+  # LINEAR predictions for ages 0-2
+  geom_line(data = early_pred, 
+            aes(x = Age, y = FSVLAFTER, colour = Site), 
+            linewidth = 1.2) +
+  geom_ribbon(data = early_pred, 
+              aes(x = Age, ymin = lower, ymax = upper, fill = Site), 
+              alpha = 0.2) +
+  # VON BERTALANFFY predictions for ages 2+
+  geom_line(data = pred_all, 
+            aes(x = Age, y = FSVLAFTER, colour = Site), 
+            linewidth = 1.2) +
+  geom_ribbon(data = pred_all, 
+              aes(x = Age, ymin = lower, ymax = upper, fill = Site), 
+              alpha = 0.2) +
+  # Asymptote lines
+  geom_hline(yintercept = Linf_OR, 
+             colour = "coral1", linetype = "dashed", linewidth = 0.6) +
+  geom_hline(yintercept = Linf_CP, 
+             colour = "cornflowerblue", linetype = "dashed", linewidth = 0.6) +
+  scale_x_continuous(breaks = seq(0, 14, by = 2), limits = c(0, 14)) +
+  scale_colour_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  scale_fill_manual(values = c("OR" = "coral1", "CP" = "cornflowerblue")) +
+  labs(x = "Age (years)", y = "Snout-vent length (mm)") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+p_growth
+
+ggsave("GrowthCurve_final.pdf", p_growth, 
+       width = 10, height = 10, units = "cm", dpi = 600)
+ggsave("GrowthCurve_final.png", p_growth, 
+       width = 10, height = 10, units = "cm", dpi = 600)
+
+
+
+```
+
+
