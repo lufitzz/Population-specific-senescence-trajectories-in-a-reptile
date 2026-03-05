@@ -1,0 +1,626 @@
+---
+title: "Manuscript Figures — Ocellatus Senescence"
+author: "Luisa Fitzpatrick"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 6)
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(cowplot)
+library(ggplot2)
+library(nlme)
+library(MASS)
+library(BaSTA)
+library(BaFTA)
+library(rnaturalearth)
+library(terra)
+library(sf)
+library(geodata)
+library(magick)
+```
+
+---
+
+# Figure 1 — Study System
+
+**Required files:**
+
+- `data/processed/BOM.csv`
+- `images/ocellatus.jpg`
+
+```{r figure1-data}
+
+# ── Month label helper (single letters for x-axes) ──────────────────────────
+month_letters <- c("J","F","M","A","M","J","J","A","S","O","N","D")
+
+# ── Shared theme ─────────────────────────────────────────────────────────────
+theme_fig1 <- theme_classic(base_size = 11) +
+  theme(axis.text  = element_text(color = "black"),
+        axis.line  = element_line(color = "black"),
+        plot.margin = margin(12, 8, 5, 8))   # extra top margin for panel labels
+
+site_colors <- c("OR" = "coral1", "CP" = "cornflowerblue")
+site_labels <- c("OR" = "Lowland", "CP" = "Highland")
+```
+
+## Panel A — Species photo
+
+```{r fig1-panelA}
+photo_species <- magick::image_read(here("images", "ocellatus.jpg"))
+p_species <- ggdraw() + draw_image(photo_species)
+```
+
+## Panel B — Tasmania elevation map
+
+```{r fig1-panelB, message=FALSE}
+# Download elevation (cached to tempdir after first run)
+elev     <- elevation_30s(country = "AUS", path = tempdir())
+tas_ext  <- ext(144.5, 148.5, -43.7, -40.0)
+elev_tas <- crop(elev, tas_ext)
+
+elev_df  <- as.data.frame(elev_tas, xy = TRUE)
+colnames(elev_df) <- c("lon", "lat", "elevation")
+elev_df  <- elev_df[!is.na(elev_df$elevation), ]
+
+sites <- data.frame(
+  name = c("Highland", "Lowland"),
+  lon  = c(146.5722, 147.8489),
+  lat  = c(-41.8447, -42.5594))
+
+map1 <- ggplot() +
+  geom_raster(data = elev_df, aes(x = lon, y = lat, fill = elevation)) +
+  scale_fill_gradientn(
+    colours = terrain.colors(10),
+    name    = "Elevation (m)") +
+  geom_point(data = sites, aes(x = lon, y = lat),
+             shape = 21, fill = c("cornflowerblue", "coral1"),
+             color = "black", size = 5, stroke = 1.2) +
+  geom_text(data = sites, aes(x = lon, y = lat, label = name),
+            hjust = 0.6, vjust = 2.4, size = 3.5, fontface = "bold") +
+  coord_sf(xlim = c(144.5, 148.5), ylim = c(-43.7, -40.0),
+           crs = 4326, expand = FALSE, datum = sf::st_crs(4326)) +
+  theme_void(base_size = 11) +
+  theme(
+    # Extra margins so the elevation legend is never clipped
+    plot.margin          = margin(12, 8, 15, 8),
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.background    = element_rect(fill = "white", color = NA),
+    legend.title         = element_text(size = 10),
+    legend.text          = element_text(size = 9),
+    legend.key.width     = unit(1.0, "cm"),
+    legend.key.height    = unit(0.3, "cm"),
+    legend.margin        = margin(4, 0, 0, 0),
+    legend.box.margin    = margin(0, 0, 0, 0),
+    plot.clip            = "off")
+
+map1
+```
+
+## Panels C & D — Climate
+
+```{r fig1-panelCD}
+bom <- read.csv(here("data", "processed", "BOM.csv"))
+
+monthly_summary <- bom %>%
+  group_by(Site, Month) %>%
+  summarise(
+    AvgMaxTemp = mean(Maxtemp,  na.rm = TRUE),
+    SDMaxTemp  = sd(Maxtemp,   na.rm = TRUE),
+    AvgMinTemp = mean(Mintemp,  na.rm = TRUE),
+    SDMinTemp  = sd(Mintemp,   na.rm = TRUE),
+    TotalRain  = sum(Rainfall,  na.rm = TRUE),
+    SDRain     = sd(Rainfall,   na.rm = TRUE) * sqrt(n()),
+    .groups    = "drop") %>%
+  mutate(Month = factor(Month, levels = 1:12, ordered = TRUE))
+
+# Panel C — Temperature
+temp_plot <- ggplot(monthly_summary,
+                    aes(x = as.numeric(Month), group = Site,
+                        color = Site, fill = Site)) +
+  geom_ribbon(aes(ymin = AvgMaxTemp - SDMaxTemp,
+                  ymax = AvgMaxTemp + SDMaxTemp),
+              alpha = 0.2, color = NA) +
+  geom_line(aes(y = AvgMaxTemp), linewidth = 1.2, linetype = "solid") +
+  geom_point(aes(y = AvgMaxTemp), size = 2.5) +
+  geom_ribbon(aes(ymin = AvgMinTemp - SDMinTemp,
+                  ymax = AvgMinTemp + SDMinTemp),
+              alpha = 0.2, color = NA) +
+  geom_line(aes(y = AvgMinTemp), linewidth = 1.2, linetype = "dashed") +
+  geom_point(aes(y = AvgMinTemp), size = 2.5, shape = 1) +
+  scale_color_manual(values = site_colors, labels = site_labels) +
+  scale_fill_manual(values  = site_colors, labels = site_labels) +
+  scale_y_continuous(labels = function(x) paste0(x, "    ")) +
+  scale_x_continuous(breaks = 1:12, labels = month_letters,
+                   limits = c(0.5, 12.5), expand = expansion(add = 0)) +
+  labs(y = "Mean daily temperature (°C)", x = NULL,
+       color = "Population", fill = "Population") +
+  theme_fig1 +
+  theme(legend.position = "none")
+  
+  temp_plot
+
+# Panel D — Rainfall
+rain_plot <- ggplot(monthly_summary,
+                    aes(x = as.numeric(Month), y = TotalRain, fill = Site)) +
+  geom_col(aes(x = as.numeric(Month) + ifelse(Site == "OR", -0.2, 0.2)),
+           position = "identity", width = 0.35) +
+  geom_errorbar(aes(x   = as.numeric(Month) + ifelse(Site == "OR", -0.2, 0.2),
+                    ymin = TotalRain,
+                    ymax = TotalRain + SDRain),
+                width = 0.15, linewidth = 0.5) +
+  scale_fill_manual(values = site_colors, labels = site_labels) +
+  scale_x_continuous(breaks = 1:12, labels = month_letters,
+                   limits = c(0.5, 12.5), expand = expansion(add = 0)) +
+  scale_y_continuous(
+    expand = c(0, 0),
+    limits = c(0, max(monthly_summary$TotalRain + monthly_summary$SDRain,
+                      na.rm = TRUE) * 1.1)) +
+  labs(y = "Total monthly rainfall (mm)", x = NULL, fill = "Population") +
+  theme_fig1 +
+  theme(legend.position = "none")
+```
+
+## Panel E — Activity timeline
+
+```{r fig1-panelE}
+# Convert day-of-year to decimal month so x-axis matches panels C & D (scale 1–12)
+d2m <- function(day) day * 12 / 365
+
+create_daily_activity <- function(entry_day, emergence_day, site_name) {
+  data.frame(
+    Site   = site_name,
+    Month  = d2m(1:365),
+    Status = ifelse(1:365 >= entry_day & 1:365 <= emergence_day,
+                    "Hibernation", "Active"))
+}
+
+daily_activity <- rbind(
+  create_daily_activity(152, 247, "OR"),   # Jun 1 – Sep 4
+  create_daily_activity(134, 276, "CP"))   # May 14 – Oct 3
+
+hiber_timing <- data.frame(
+  Site     = c("OR", "OR", "CP", "CP"),
+  Event    = c("Entry", "Emergence", "Entry", "Emergence"),
+  Month    = d2m(c(152, 247, 134, 276)),
+  MinMonth = d2m(c(129, 215, 105, 250)),
+  MaxMonth = d2m(c(173, 267, 154, 295)),
+  y        = c(2, 2, 1, 1))
+
+activity_plot <- ggplot(daily_activity,
+                        aes(x = Month, y = Site,
+                            fill = interaction(Site, Status))) +
+  geom_tile(color = NA, height = 0.8, alpha = 0.4) +
+  geom_errorbar(data = hiber_timing,
+                aes(xmin = MinMonth, xmax = MaxMonth, y = y, color = Site),
+                width = 0.4, linewidth = 1.2,
+                orientation = "y", inherit.aes = FALSE) +
+  geom_point(data = hiber_timing,
+             aes(x = Month, y = y, color = Site),
+             size = 3, inherit.aes = FALSE) +
+  scale_fill_manual(
+    values = c("OR.Active"          = "white",  "OR.Hibernation"  = "coral1",
+               "CP.Active"          = "white",  "CP.Hibernation"  = "cornflowerblue"),
+    guide  = "none") +
+  scale_color_manual(values = site_colors, guide = "none") +
+  scale_x_continuous(breaks = 1:12, labels = month_letters,
+                   limits = c(0.5, 12.5), expand = expansion(add = 0)) +
+  scale_y_discrete(labels = function(x) "0000") +
+  labs(x = NULL, y = "Dormant season") +
+  theme_fig1 +
+  theme(panel.grid.major.x = element_line(color = "gray90", linetype = "dotted"),
+        axis.text.y = element_text(color = "white"))
+```
+
+## Assemble Figure 1
+
+```{r fig1-assemble, fig.width=7, fig.height=6.5}
+
+# Shared legend from temp plot
+legend_fig1 <- get_legend(
+  temp_plot +
+    theme(legend.position      = "bottom",
+          legend.justification = "center",
+          legend.direction     = "horizontal"))
+
+# Left column: species photo + map
+# Extra padding on each plot so labels sit above, not on top of, the content
+context_col <- plot_grid(
+  p_species + theme(plot.margin = margin(16, 8, 5, 8)),
+  map1,
+  ncol        = 1,
+  labels      = c("A", "B"),
+  label_size  = 14,
+  label_x     = 0,
+  label_y     = 1,
+  hjust       = -0.2,
+  vjust       = 1.2,
+  rel_heights = c(0.85, 1.15))
+
+# Right column: climate + activity, all with matching top margin
+climate_and_activity <- plot_grid(
+  temp_plot     + theme(plot.margin = margin(24, 8, 5, 14)),
+  rain_plot     + theme(plot.margin = margin(24, 8, 5, 14)),
+  activity_plot + theme(plot.margin = margin(24, 8, 5, 14)),
+  ncol        = 1,
+  labels      = c("C", "D", "E"),
+  label_size  = 14,
+  label_x     = 0,
+  label_y     = 1,
+  hjust       = -0.2,
+  vjust       = 1.2,
+  align       = "hv",
+  axis        = "tblr",   
+  rel_heights = c(1, 1, 0.7))
+
+# Add shared legend below right column
+data_col <- plot_grid(
+  climate_and_activity,
+  legend_fig1,
+  ncol        = 1,
+  rel_heights = c(1, 0.07))
+
+# Final figure
+figure1 <- plot_grid(context_col, data_col,
+                     ncol       = 2,
+                     rel_widths = c(1, 1.2))
+
+figure1
+
+ggsave(here("figures", "Figure1_StudySystem.jpg"),
+       figure1, width = 7, height = 6.5, units = "in", dpi = 300)
+
+ggsave(here("figures", "Figure1_StudySystem.pdf"),
+       figure1, width = 7, height = 6.5, units = "in")
+```
+
+---
+
+# Figure 2 — Senescence Trajectories (4-panel)
+
+**Required files:**
+
+- `bafta_outputs/out_CM_CP.rds`
+- `bafta_outputs/out_CM_OR.rds`
+- `basta_outputs/out_CP_GM.rds`
+- `basta_outputs/out_OR_WE.rds`
+- `data/growth_data.csv`
+- `data/reproductive_data5.csv`
+
+```{r figure2-data}
+
+# ── Shared aesthetics ─────────────────────────────────────────────────────────
+site_colors2 <- c("Lowland" = "coral1", "Highland" = "cornflowerblue")
+
+theme_publication <- theme_classic(base_size = 11) +
+  theme(axis.text   = element_text(color = "black"),
+        axis.line   = element_line(color = "black"),
+        plot.margin = margin(12, 8, 5, 8),
+        legend.text  = element_text(size = 9),
+        legend.title = element_blank())
+
+# ── Load BaFTA outputs ────────────────────────────────────────────────────────
+out_CM_CP <- readRDS(here("bafta_outputs", "out_CM_CP.rds"))
+out_CM_OR <- readRDS(here("bafta_outputs", "out_CM_OR.rds"))
+
+# ── Load BaSTA outputs ────────────────────────────────────────────────────────
+out_CP_GM    <- readRDS(here("basta_outputs", "out_CP.rds"))      # Highland
+out_OR_WE <- readRDS(here("basta_outputs", "out_OR_WE.rds"))   # Lowland
+
+# ── Load main dataset ─────────────────────────────────────────────────────────
+data <- read.csv(here("data", "processed", "reproductive_data.csv"),
+                 na.strings = c("", "NA", ".", "?")) %>%
+  dplyr::select(Year, FemID, Site, Age, Clutch) %>%
+  dplyr::rename(year = Year, indID = FemID, site = Site, nOffspring = Clutch) %>%
+  dplyr::mutate(indID      = as.factor(indID),
+                site       = as.factor(site),
+                Age        = as.integer(Age),
+                nOffspring = as.integer(nOffspring)) %>%
+  dplyr::filter(!is.na(indID), indID != 0,
+                !is.na(Age),   Age  != 0,
+                !is.na(nOffspring), nOffspring != 0)
+```
+
+## Panel A — Growth curves
+
+```{r fig2-panelA, message=FALSE}
+growth_data_all <- read.csv(here("data", "processed", "growth_data.csv"),
+                            na.strings = c("", ",", "NA", "."),
+                            header = TRUE)
+
+recode_site <- c(OR = "Lowland", CP = "Highland")
+
+# ── Adults (age ≥ 2): von Bertalanffy via nlme ───────────────────────────────
+growth_adults <- growth_data_all %>%
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), !is.na(Age),
+         !is.na(FEMID.), Age >= 2)
+
+fit_vb_OR <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data    = growth_adults %>% filter(SITE. == "OR"),
+  fixed   = Linf + K + t0 ~ 1,
+  random  = Linf ~ 1 | FEMID.,
+  start   = c(Linf = 74, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+fit_vb_CP <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data    = growth_adults %>% filter(SITE. == "CP"),
+  fixed   = Linf + K + t0 ~ 1,
+  random  = Linf ~ 1 | FEMID.,
+  start   = c(Linf = 89, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Population-level predictions (level = 0)
+newdata_ages <- data.frame(Age = seq(2, 14, length.out = 100))
+
+pred_OR <- newdata_ages %>%
+  mutate(FSVLAFTER = predict(fit_vb_OR, newdata = newdata_ages, level = 0),
+         Site = "OR")
+
+pred_CP <- newdata_ages %>%
+  mutate(FSVLAFTER = predict(fit_vb_CP, newdata = newdata_ages, level = 0),
+         Site = "CP")
+
+# Bootstrap 95% CIs (parametric, from fixed-effect vcov)
+set.seed(123)
+
+boot_vb <- function(fit, newages, n = 1000) {
+  beta  <- fixef(fit)
+  sims  <- MASS::mvrnorm(n, beta, vcov(fit))
+  preds <- apply(sims, 1, function(b) {
+    b["Linf"] * (1 - exp(-b["K"] * (newages - b["t0"])))
+  })
+  list(lower = apply(preds, 1, quantile, 0.025),
+       upper = apply(preds, 1, quantile, 0.975))
+}
+
+ci_OR <- boot_vb(fit_vb_OR, newdata_ages$Age)
+ci_CP <- boot_vb(fit_vb_CP, newdata_ages$Age)
+
+pred_OR <- pred_OR %>% mutate(lower = ci_OR$lower, upper = ci_OR$upper)
+pred_CP <- pred_CP %>% mutate(lower = ci_CP$lower, upper = ci_CP$upper)
+
+pred_all <- bind_rows(pred_OR, pred_CP) %>%
+  mutate(site = recode(Site, !!!recode_site))
+
+# ── Early growth (age 0–2): lm ─────────────────────────────────────
+
+# Juvenile means ± SE (ages 0, 0.75) 
+
+juvenile_means <- growth_data_all %>%
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), !is.na(Age), Age <= 2, Age != 2) %>%
+  mutate(site = recode(SITE., !!!recode_site)) %>%
+  group_by(Age, site) %>%
+  summarise(
+    mean_SVL = mean(FSVLAFTER, na.rm = TRUE),
+    sd_SVL   = sd(FSVLAFTER,  na.rm = TRUE),
+    .groups  = "drop")
+
+growth_plot_data <- growth_data_all %>%
+  mutate(site = recode(SITE., !!!recode_site))
+
+Linf_OR <- fixef(fit_vb_OR)["Linf"]
+Linf_CP <- fixef(fit_vb_CP)["Linf"]
+
+# ── Plot ──────────────────────────────────────────────────────────────────────
+p_growth <- ggplot() +
+  geom_jitter(data = growth_plot_data,
+              aes(x = Age, y = FSVLAFTER, colour = site),
+              width = 0.15, height = 0, alpha = 0.3, size = 0.5) +
+  geom_ribbon(data = pred_all,
+              aes(x = Age, ymin = lower, ymax = upper, fill = site),
+              alpha = 0.2) +
+  geom_line(data = pred_all,
+            aes(x = Age, y = FSVLAFTER, colour = site), linewidth = 1.2) +
+  geom_hline(yintercept = Linf_OR,
+             colour = "coral1",         linetype = "dashed", linewidth = 0.6) +
+  geom_hline(yintercept = Linf_CP,
+             colour = "cornflowerblue", linetype = "dashed", linewidth = 0.6) +
+  geom_pointrange(data = juvenile_means,
+                  aes(x = Age, y = mean_SVL,
+                      ymin = mean_SVL - sd_SVL,
+                      ymax = mean_SVL + sd_SVL,
+                      fill = site,
+                      group = site),
+                  colour = "black",
+                  shape = 21,
+                  size = 1.2,
+                  linewidth = 0.8,
+                  position = position_dodge(width = 0.3))+
+  scale_x_continuous(breaks = seq(0, 12, by = 2), limits = c(-0.3, 12))+
+  scale_colour_manual(values = site_colors2) +
+  scale_fill_manual(values   = site_colors2) +
+  labs(x = "Age (years)", y = "Snout-vent length (mm)") +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_growth
+
+
+```
+
+## Panel B — Cumulative offspring
+
+```{r fig2-panelB}
+cumulative_data <- data %>%
+  arrange(indID, Age) %>%
+  group_by(indID, site) %>%
+  mutate(cumulative_offspring = cumsum(nOffspring),
+         reproductive_event  = row_number()) %>%
+  ungroup() %>%
+  filter(Age >= 2, Age <= 12) %>%
+  mutate(site = recode(as.character(site), !!!recode_site))
+
+cumulative_summary <- cumulative_data %>%
+  group_by(site, Age) %>%
+  summarise(
+    mean_cumulative = mean(cumulative_offspring),
+    se        = sd(cumulative_offspring) / sqrt(n()),
+    lower_ci  = mean_cumulative - 1.96 * se,
+    upper_ci  = mean_cumulative + 1.96 * se,
+    .groups   = "drop")
+
+p_cumulative <- ggplot() +
+  geom_line(data = cumulative_data,
+            aes(x = Age, y = cumulative_offspring,
+                group = indID, color = site),
+            alpha = 0.2, linewidth = 0.3) +
+  geom_ribbon(data = cumulative_summary,
+              aes(x = Age, ymin = lower_ci, ymax = upper_ci, fill = site),
+              alpha = 0.3) +
+  geom_line(data = cumulative_summary,
+            aes(x = Age, y = mean_cumulative, color = site),
+            linewidth = 1.5) +
+  scale_color_manual(values = site_colors2) +
+  scale_fill_manual(values  = site_colors2) +
+  scale_x_continuous(breaks = seq(2, 12, 2)) +
+  scale_y_continuous(breaks = seq(0, 55, 10)) +
+  labs(x = "Age (years)", y = "Cumulative offspring") +
+  theme_publication +
+  theme(legend.position = "none")
+```
+
+## Panel C — Fertility trajectories (BaFTA)
+
+```{r fig2-panelC}
+fert_data <- bind_rows(
+  data.frame(age    = out_CM_OR$x,
+             median = out_CM_OR$fert[, "Mean"],
+             lower  = out_CM_OR$fert[, "Lower"],
+             upper  = out_CM_OR$fert[, "Upper"],
+             site   = "Lowland"),
+  data.frame(age    = out_CM_CP$x,
+             median = out_CM_CP$fert[, "Mean"],
+             lower  = out_CM_CP$fert[, "Lower"],
+             upper  = out_CM_CP$fert[, "Upper"],
+             site   = "Highland"))
+
+p_fertility <- ggplot(fert_data,
+                      aes(x = age, y = median, color = site, fill = site)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors2) +
+  scale_fill_manual(values  = site_colors2) +
+  scale_x_continuous(breaks = seq(2, 12, 2), limits = c(2, 12)) +
+  labs(y = "Expected litter size", x = "Age (years)") +
+  theme_publication +
+  theme(legend.position = "none")
+```
+
+## Panel D — Mortality hazard (BaSTA)
+
+```{r fig2-panelD}
+# Extract Gompertz-Makeham trajectories from MCMC posteriors (CP highland)
+calculate_hazard_GM <- function(basta_out, site_name, ages = 2:12) {
+  params <- as.data.frame(basta_out$params)
+  lapply(seq_len(nrow(params)), function(i) {
+    data.frame(
+      age    = ages,
+      hazard = exp(params$b0[i] + params$b1[i] * ages) + params$c[i],
+      site   = site_name)
+  }) %>%
+    bind_rows() %>%
+    group_by(age, site) %>%
+    summarise(
+      median = median(hazard),
+      lower  = quantile(hazard, 0.025),
+      upper  = quantile(hazard, 0.975),
+      .groups = "drop")
+}
+
+# Extract Weibull-simple trajectories from MCMC posteriors (OR lowland)
+# Weibull hazard: mu(x) = b0 * b1 * x^(b1 - 1)
+calculate_hazard_WE <- function(basta_out, site_name, ages = 2:12) {
+  params <- as.data.frame(basta_out$params)
+  lapply(seq_len(nrow(params)), function(i) {
+    data.frame(
+      age    = ages,
+      hazard = params$b0[i] * params$b1[i] * ages^(params$b1[i] - 1),
+      site   = site_name)
+  }) %>%
+    bind_rows() %>%
+    group_by(age, site) %>%
+    summarise(
+      median = median(hazard),
+      lower  = quantile(hazard, 0.025),
+      upper  = quantile(hazard, 0.975),
+      .groups = "drop")
+}
+
+haz_OR <- calculate_hazard_WE(out_OR_WE, "Lowland")
+haz_CP <- calculate_hazard_GM(out_CP_GM, "Highland")
+haz_data <- bind_rows(haz_OR, haz_CP)
+
+p_mortality <- ggplot(haz_data,
+                      aes(x = age, y = median, color = site, fill = site)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors2) +
+  scale_fill_manual(values  = site_colors2) +
+  scale_x_continuous(breaks = seq(2, 12, 2), limits = c(2, 12)) +
+  labs(x = "Age (years)", y = "Mortality hazard μ(x)") +
+  theme_publication +
+  theme(legend.position = "none")
+
+```
+
+## Assemble Figure 2
+
+```{r fig2-assemble, fig.width=10, fig.height=8}
+
+# Shared legend from fertility panel
+legend_fig2 <- get_legend(
+  p_fertility +
+    theme(legend.position      = "bottom",
+          legend.justification = "center",
+          legend.direction     = "horizontal"))
+
+# 2 × 2 grid
+panels_2x2 <- plot_grid(
+  p_growth, p_cumulative,
+  p_fertility, p_mortality,
+  ncol       = 2,
+  nrow       = 2,
+  labels     = c("A", "B", "C", "D"),
+  label_size = 14,
+  label_x    = 0,
+  label_y    = 1,
+  hjust      = -0.2,
+  vjust      = 1.2,
+  align      = "hv",
+  axis       = "tblr")
+
+# Attach shared legend
+figure2 <- plot_grid(panels_2x2, legend_fig2,
+                     ncol        = 1,
+                     rel_heights = c(1, 0.06))
+
+figure2
+
+ggsave(here("figures", "Figure2_Senescence.png"),
+       figure2, width = 10, height = 8, units = "in", dpi = 600)
+
+ggsave(here("figures", "Figure2_Senescence.pdf"),
+       figure2, width = 10, height = 8, units = "in")
+```
+
+---
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```
