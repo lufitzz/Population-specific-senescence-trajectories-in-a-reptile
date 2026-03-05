@@ -1,0 +1,723 @@
+---
+title: "Actuarial Senescence Analysis"
+author: "Luisa Fitzpatrick"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(here)
+library(tidyverse)
+library(BaSTA)
+library(cowplot)
+library(ggplot2)
+library(gridExtra)
+library(lme4)
+library(flextable)
+library(officer)
+
+# Shared plotting aesthetics
+site_colors <- c("Warm lowland" = "coral1", "Cool highland" = "cornflowerblue")
+
+theme_publication <- theme_classic(base_size = 12) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.line = element_line(color = "black"),
+    legend.position = "none",
+    plot.margin = margin(10, 10, 10, 10))
+```
+
+# 1. Load and prepare data
+```{r load-data}
+data <- read.csv(here("data", "processed", "census_data.csv"),
+                 na = c("", "NA", ".", "?")) %>%
+  select(Year, FemID, Site, Age, DeathYear) %>%
+  rename(year = Year, femid = FemID, site = Site, death = DeathYear) %>%
+  mutate(
+    birth = year - Age,
+    femid = as.factor(femid),
+    site  = as.factor(site),
+    death = as.integer(death),  # NAs introduced here are expected: individuals
+    birth = as.integer(birth))  # with no recorded death year are right-censored
+                                # (death set to 0 in prepare_basta_input)
+data <- data %>% filter(!is.na(femid))
+```
+
+# 2. Helper functions
+```{r helper-functions}
+# Prepare BaSTA input matrix from site-level data.
+# birth/death NAs are replaced with 0 (BaSTA convention for unknown dates).
+# Row order of birthDeath is matched to Y matrix by ID to avoid misalignment.
+prepare_basta_input <- function(site_data, study_start, study_end) {
+  site_data$birth[is.na(site_data$birth)] <- 0
+  site_data$death[is.na(site_data$death)] <- 0
+  
+  Y <- CensusToCaptHist(ID = site_data$femid, d = site_data$year, dformat = "yyyy")
+  
+  birthDeath <- site_data %>%
+    select(femid, birth, death) %>%
+    distinct(femid, .keep_all = TRUE)
+  
+  # Match row order to Y matrix rather than assuming sorted order
+  birthDeath <- birthDeath[match(Y[, 1], birthDeath$femid), ]
+  
+  n_year_cols <- ncol(Y) - 1  # minus the ID column
+  inputMat <- as.data.frame(cbind(Y, birthDeath[, -1]))
+  inputMat <- inputMat[, c(1, n_year_cols + 2, n_year_cols + 3, 2:(n_year_cols + 1))]
+  
+  cat("Total individuals:", nrow(inputMat), "\n")
+  cat("Total capture events:", sum(Y[, -1]), "\n")
+  
+  DataCheck(inputMat, studyStart = study_start, studyEnd = study_end, silent = FALSE)
+  
+  return(inputMat)
+}
+```
+
+
+# ============================================================
+# COOL HIGHLAND (CENTRAL PLATEAU) ANALYSIS
+# ============================================================
+
+# 3. Prepare Plateau data
+```{r prep-cp}
+dataCP <- data %>% filter(site == "CP") %>% select(-site)
+inputMat_CP <- prepare_basta_input(dataCP, study_start = 2000, study_end = 2024)
+```
+
+# 4. Model selection — compare mortality functions (CP)
+```{r basta-cp-multi, eval=FALSE}
+set.seed(123)
+multiout_CP <- multibasta(
+  object = inputMat_CP, studyStart = 2000, studyEnd = 2024,
+  models = c("EX", "GO", "WE", "LO"),
+  shapes  = c("simple", "Makeham"),
+  nsim = 4, niter = 10000, burnin = 2000, thinning = 10, ncpus = 4)
+
+saveRDS(multiout_CP, here("basta_outputs", "multiout_CP.rds"))
+```
+
+```{r load-multi-cp}
+multiout_CP <- readRDS(here("basta_outputs", "multiout_CP.rds"))
+summary(multiout_CP, digits = 3)
+# Result: Gompertz-Makeham selected as best model by DIC
+```
+
+# 5. Validate recapture assumption (CP)
+
+BaSTA assumes constant recapture probability across years by default. We test
+this by comparing constant vs. time-varying recapture under the best-fitting
+model (Gompertz-Makeham). Lower DIC supports the better-fitting recapture
+structure.
+
+```{r recapture-dic-cp, eval=FALSE}
+out_CP_const <- basta(
+  object = inputMat_CP, studyStart = 2000, studyEnd = 2024,
+  model = "GO", shape = "Makeham", minAge = 2,
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE)
+
+out_CP_tv <- basta(
+  object = inputMat_CP, studyStart = 2000, studyEnd = 2024,
+  model = "GO", shape = "Makeham", minAge = 2,
+  recaptureType = "year",
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE)
+
+saveRDS(out_CP_const, here("basta_outputs", "out_CP_const.rds"))
+saveRDS(out_CP_tv,    here("basta_outputs", "out_CP_tv.rds"))
+```
+
+```{r recapture-dic-cp-results}
+out_CP_const <- readRDS(here("basta_outputs", "out_CP_const.rds"))
+out_CP_tv    <- readRDS(here("basta_outputs", "out_CP_tv.rds"))
+
+cat("CP — Constant recapture DIC:", out_CP_const$DIC["DIC"], "\n")
+cat("CP — Time-varying recapture DIC:", out_CP_tv$DIC["DIC"], "\n")
+
+cat("Constant recapture:\n")
+print(out_CP_const$coefficients[1:3, ])
+
+cat("\nTime-varying recapture:\n")
+print(out_CP_tv$coefficients[1:3, ])
+
+# Time-varying fits best
+```
+
+# 6. Final model — Gompertz-Makeham (CP) with time-varying recapture
+```{r basta-cp-final, eval=FALSE}
+set.seed(123)
+out_CP_GM_final <- basta(
+  object = inputMat_CP, studyStart = 2000, studyEnd = 2024,
+  model = "GO", shape = "Makeham", minAge = 2,
+  recaptureType = "year",
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE, lifeTable = TRUE)
+
+saveRDS(out_CP_GM_final, here("basta_outputs", "out_CP_GM_final.rds"))
+```
+
+```{r cp-results}
+out_CP_GM_final <- readRDS(here("basta_outputs", "out_CP_GM_final.rds"))
+summary(out_CP_GM_final, digits = 3)
+
+cat("\nMortality parameters:\n")
+print(round(out_CP_GM_final$coefficients[1:3, ], 4))
+
+cat("\nConvergence (Rhat):\n")
+print(out_CP_GM_final$convergence)
+
+life_CP <- round(out_CP_GM_final$lifeTable$noCov$Mean, 4)
+print(life_CP)
+```
+
+```{r plot-cp}
+plot(out_CP_GM_final, col = "cornflowerblue", plot.type = "fancy")
+```
+
+
+# ============================================================
+# WARM LOWLAND (ORFORD) ANALYSIS
+# ============================================================
+
+# 7. Prepare Orford data
+```{r prep-or}
+dataOR <- data %>% filter(site == "OR") %>% select(-site)
+inputMat_OR <- prepare_basta_input(dataOR, study_start = 2000, study_end = 2024)
+```
+
+# 8. Model selection — compare mortality functions (OR)
+
+Fit all combinations of mortality model x shape to identify the best-fitting
+parametric survival model. This is a coarse screen using shorter MCMC chains.
+
+```{r basta-or-multi, eval=FALSE}
+set.seed(123)
+multiout_OR <- multibasta(
+  object = inputMat_OR, studyStart = 2000, studyEnd = 2024,
+  models = c("EX", "GO", "WE", "LO"),
+  shapes  = c("simple", "Makeham"),
+  nsim = 4, niter = 10000, burnin = 2000, thinning = 10, ncpus = 4)
+
+saveRDS(multiout_OR, here("basta_outputs", "multiout_OR.rds"))
+```
+
+```{r load-multi-or}
+multiout_OR <- readRDS(here("basta_outputs", "multiout_OR.rds"))
+summary(multiout_OR, digits = 3)
+# Result: WE simple selected as best model by DIC (4852), then WE Makeham (4863)
+```
+
+# 9. Validate recapture assumption (OR)
+
+BaSTA assumes constant recapture probability across years. Before running the
+final model, we test this by comparing the DIC of the best mortality model
+(Weibull simple) under constant vs. time-varying recapture. Lower DIC supports
+the better-fitting recapture structure.
+
+```{r recapture-dic-or, eval=FALSE}
+out_OR_WE_const <- basta(
+  object = inputMat_OR, studyStart = 2000, studyEnd = 2024,
+  model = "WE", shape = "simple", minAge = 2,
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE)
+
+out_OR_WE_tv <- basta(
+  object = inputMat_OR, studyStart = 2000, studyEnd = 2024,
+  model = "WE", shape = "simple", minAge = 2,
+  recaptureType = "year",
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE)
+
+saveRDS(out_OR_WE_const, here("basta_outputs", "out_OR_WE_const.rds"))
+saveRDS(out_OR_WE_tv,    here("basta_outputs", "out_OR_WE_tv.rds"))
+```
+
+```{r recapture-dic-or-results}
+out_OR_WE_const <- readRDS(here("basta_outputs", "out_OR_WE_const.rds"))
+out_OR_WE_tv    <- readRDS(here("basta_outputs", "out_OR_WE_tv.rds"))
+
+cat("OR — Constant recapture DIC:", out_OR_WE_const$DIC["DIC"], "\n")
+cat("OR — Time-varying recapture DIC:", out_OR_WE_tv$DIC["DIC"], "\n")
+
+cat("Constant recapture:\n")
+print(out_OR_WE_const$coefficients[1:3, ])
+
+cat("\nTime-varying recapture:\n")
+print(out_OR_WE_tv$coefficients[1:3, ])
+
+# Time-varying fits best
+```
+
+# 10. Final model — Weibull simple (OR) with time-varying recapture
+
+Run with longer chains for robust posterior estimates and life table derivation.
+
+```{r basta-or-final, eval=FALSE}
+set.seed(123)
+out_OR_WE_final <- basta(
+  object = inputMat_OR, studyStart = 2000, studyEnd = 2024,
+  model = "WE", shape = "simple", minAge = 2,
+  recaptureType = "year",
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE, lifeTable = TRUE)
+
+saveRDS(out_OR_WE_final, here("basta_outputs", "out_OR_WE_final.rds"))
+```
+
+```{r or-results}
+out_OR_WE_final <- readRDS(here("basta_outputs", "out_OR_WE_final.rds"))
+summary(out_OR_WE_final, digits = 3)
+
+cat("\nMortality parameters:\n")
+print(round(out_OR_WE_final$coefficients[1:3, ], 4))
+
+cat("\nConvergence (Rhat):\n")
+print(out_OR_WE_final$convergence)
+
+life_OR <- round(out_OR_WE_final$lifeTable$noCov$Mean, 4)
+print(life_OR)
+```
+
+```{r plot-or}
+plot(out_OR_WE_final, col = "coral1", plot.type = "fancy")
+```
+
+
+# ============================================================
+# CROSS-POPULATION COMPARISON
+# ============================================================
+
+# 11. Mortality hazard comparison figure
+```{r mortality-comparison}
+extract_mort_curve_full <- function(basta_out, site_name, max_age = 12) {
+  ages <- basta_out$x
+  idx <- ages <= max_age
+  data.frame(
+    age    = ages[idx],
+    mean = basta_out$mort$nocov["Mean", idx],
+    lower  = basta_out$mort$nocov["2.5%", idx],
+    upper  = basta_out$mort$nocov["97.5%", idx],
+    site   = site_name)
+}
+
+haz_data <- bind_rows(
+  extract_mort_curve_full(out_OR_WE_final, "Warm lowland"),
+  extract_mort_curve_full(out_CP_GM_final, "Cool highland"))
+
+p_haz_overlay <- ggplot(haz_data, aes(x = age, y = mean, color = site, fill = site)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = site_colors) +
+  scale_fill_manual(values = site_colors) +
+  scale_x_continuous(breaks = seq(2, 12, 2)) +
+  labs(y = "Mortality hazard \u03bc(x)", x = "Age (years)") +
+  theme_publication
+
+p_haz_overlay
+
+ggsave(here("outputs", "figures", "Figure_mortality_comparison.png"),
+       p_haz_overlay, width = 6, height = 5, dpi = 600)
+ggsave(here("outputs", "figures", "Figure_mortality_comparison.pdf"),
+       p_haz_overlay, width = 6, height = 5)
+```
+
+# 12. Life expectancy and mortality at key ages
+```{r extract-model-agnostic}
+# 1. Life expectancy at maturity from life tables
+life_OR_WE <- out_OR_WE_final$lifeTable$noCov$Mean
+life_CP_GM <- out_CP_GM_final$lifeTable$noCov$Mean
+
+le_OR <- life_OR_WE$ex[life_OR_WE$Ages == 2]
+le_CP <- life_CP_GM$ex[life_CP_GM$Ages == 2]
+cat("Life expectancy at age 2 - Warm lowland:", round(le_OR, 2), "\n")
+cat("Life expectancy at age 2 - Cool highland:", round(le_CP, 2), "\n")
+
+# 2. Mortality at specific ages from posterior
+ages_of_interest <- c(2, 4, 6, 8, 10, 12)
+
+extract_mort_at_ages <- function(basta_out, ages_of_interest) {
+  all_ages <- basta_out$x
+  idx <- match(ages_of_interest, all_ages)
+  data.frame(
+    age   = ages_of_interest,
+    mean  = basta_out$mort$nocov["Mean", idx],
+    lower = basta_out$mort$nocov["2.5%", idx],
+    upper = basta_out$mort$nocov["97.5%", idx])
+}
+
+mort_OR_ages <- extract_mort_at_ages(out_OR_WE_final, ages_of_interest)
+mort_CP_ages <- extract_mort_at_ages(out_CP_GM_final, ages_of_interest)
+
+cat("\nWarm lowland mortality at key ages (Weibull simple):\n")
+print(round(mort_OR_ages, 4))
+cat("\nCool highland mortality at key ages (Gompertz-Makeham):\n")
+print(round(mort_CP_ages, 4))
+
+# 3. Fold-increase in mortality from age 2 to age 12
+mort_OR_age2  <- mort_OR_ages$mean[mort_OR_ages$age == 2]
+mort_OR_age12 <- mort_OR_ages$mean[mort_OR_ages$age == 12]
+mort_CP_age2  <- mort_CP_ages$mean[mort_CP_ages$age == 2]
+mort_CP_age12 <- mort_CP_ages$mean[mort_CP_ages$age == 12]
+
+cat("\nFold-increase in mortality age 2 to 12:\n")
+cat("Warm lowland:", round(mort_OR_age12 / mort_OR_age2, 2), "\n")
+cat("Cool highland:", round(mort_CP_age12 / mort_CP_age2, 2), "\n")
+
+# 4. Confirm senescence in OR: Weibull b1 > 1 indicates increasing hazard
+cat("\nWeibull simple parameters (OR):\n")
+print(round(out_OR_WE_final$coefficients[1:2,
+      c("Mean", "Lower95%CI", "Upper95%CI")], 4))
+# b1 > 1 = senescence; check CI excludes 1
+
+# 5. Posterior overlap on mortality trajectories at key ages
+overlap_check <- data.frame(
+  age      = ages_of_interest,
+  OR_mean  = mort_OR_ages$mean,
+  OR_lower = mort_OR_ages$lower,
+  OR_upper = mort_OR_ages$upper,
+  CP_mean  = mort_CP_ages$mean,
+  CP_lower = mort_CP_ages$lower,
+  CP_upper = mort_CP_ages$upper)
+
+overlap_check$CIs_overlap <-
+  overlap_check$OR_lower < overlap_check$CP_upper &
+  overlap_check$CP_lower < overlap_check$OR_upper
+
+print(round(overlap_check, 4))
+```
+
+# 13. Median lifespan (age at which survival drops below 0.5)
+```{r median-lifespan}
+derive_median_lifespan <- function(basta_out, site_name) {
+  ages     <- basta_out$x
+  mort_mean <- basta_out$mort$nocov["Mean", ]
+  
+  # Cumulative survival from hazard (numerical integration)
+  surv <- exp(-cumsum(mort_mean * c(ages[1], diff(ages))))
+  
+  # Age at which survival first drops below 0.5
+  if (any(surv <= 0.5)) {
+    median_ls <- ages[which(surv <= 0.5)[1]]
+  } else {
+    median_ls <- max(ages)
+    warning(site_name, ": survival never drops below 0.5 within observed age range")
+  }
+  
+  cat(site_name, "median lifespan:", round(median_ls, 2), "years\n")
+  return(median_ls)
+}
+
+median_OR <- derive_median_lifespan(out_OR_WE_final, "Warm lowland")
+median_CP <- derive_median_lifespan(out_CP_GM_final, "Cool highland")
+```
+
+
+# ============================================================
+# TABLES FOR MANUSCRIPT
+# ============================================================
+
+# 14. Parameter tables — presented separately as models differ between populations
+```{r table-parameters}
+# OR: Weibull simple (b0, b1)
+# CP: Gompertz-Makeham (b0, b1, c)
+# These are not directly comparable so are presented as separate tables
+
+
+params_OR <- as.data.frame(out_OR_WE_final$coefficients) %>%
+  rownames_to_column("Parameter") %>%
+  filter(Parameter %in% c("b0", "b1")) %>%
+  select(Parameter, Mean, StdErr, Lower = "Lower95%CI", Upper = "Upper95%CI",
+         Rhat = "PotScaleReduc") %>%
+  mutate(across(where(is.numeric), ~round(.x, 3)))
+
+params_CP <- as.data.frame(out_CP_GM_final$coefficients) %>%
+  rownames_to_column("Parameter") %>%
+  filter(Parameter %in% c("b0", "b1", "c")) %>%
+  select(Parameter, Mean, StdErr, Lower = "Lower95%CI", Upper = "Upper95%CI",
+         Rhat = "PotScaleReduc") %>%
+  mutate(across(where(is.numeric), ~round(.x, 3)))
+
+ft_OR <- flextable(params_OR) %>%
+  set_header_labels(StdErr = "SE", Lower = "Lower 95% CI", 
+                    Upper = "Upper 95% CI", Rhat = "R-hat") %>%
+  set_caption("Warm lowland (Weibull simple) mortality parameters.") %>%
+  theme_vanilla() %>%
+  align(align = "center", part = "all") %>%
+  align(j = 1, align = "left", part = "body") %>%
+  autofit()
+
+ft_CP <- flextable(params_CP) %>%
+  set_header_labels(StdErr = "SE", Lower = "Lower 95% CI", 
+                    Upper = "Upper 95% CI", Rhat = "R-hat") %>%
+  set_caption("Cool highland (Gompertz-Makeham) mortality parameters.") %>%
+  theme_vanilla() %>%
+  align(align = "center", part = "all") %>%
+  align(j = 1, align = "left", part = "body") %>%
+  autofit()
+
+ft_OR
+ft_CP
+
+save_as_docx(ft_OR, path = here("outputs", "tables", "Table_params_warm_lowland.docx"))
+save_as_docx(ft_CP, path = here("outputs", "tables", "Table_params_cool_highland.docx"))
+```
+
+# 15. Life tables (Supplementary Tables S12–S13)
+```{r table-lifetables}
+for (info in list(
+  list(tbl = life_OR, pop = "Warm lowland",  cap = "Table S12",
+       file = here("outputs", "tables", "Table_S12_lifetable_warm_lowland.docx")),
+  list(tbl = life_CP, pop = "Cool highland", cap = "Table S13",
+       file = here("outputs", "tables", "Table_S13_lifetable_cool_highland.docx")))) {
+
+  tbl <- as.data.frame(info$tbl)
+  tbl$Population <- info$pop
+
+  ft_lt <- flextable(tbl) %>%
+    set_caption(paste0(info$cap, ". Life table for ", info$pop,
+                       " population.")) %>%
+    theme_vanilla() %>%
+    align(align = "center", part = "all") %>%
+    autofit()
+
+  save_as_docx(ft_lt, path = info$file)
+}
+```
+
+
+# ============================================================
+# SUPPLEMENTARY MATERIAL
+# ============================================================
+
+# 16. MCMC convergence diagnostics (Figure S1)
+```{r trace-plots}
+extract_trace <- function(model, param) {
+  traces <- model$runs
+  do.call(rbind, lapply(1:4, function(i) {
+    theta_cols <- colnames(traces[[i]]$theta)
+    if (param %in% theta_cols) {
+      values <- traces[[i]]$theta[, param]
+    } else if (param %in% names(traces[[i]])) {
+      values <- traces[[i]][[param]][, 1]
+    } else {
+      stop(paste("Parameter", param, "not found"))
+    }
+    data.frame(iteration = seq_along(values), value = values,
+               chain = paste0("Chain ", i))
+  }))
+}
+
+make_trace_plot <- function(model, param, title = NULL, subtitle = NULL) {
+  ggplot(extract_trace(model, param),
+         aes(x = iteration, y = value, color = chain)) +
+    geom_line(alpha = 0.7, linewidth = 0.3) +
+    labs(title = title, subtitle = subtitle, x = "Iteration", y = "Value") +
+    theme_bw() +
+    theme(legend.position = "none",
+          plot.title    = element_text(size = 10),
+          plot.subtitle = element_text(size = 9))
+}
+
+# OR: Weibull simple — trace plots for b0, b1
+p1 <- make_trace_plot(out_OR_WE_final, "b0", expression(b[0]))
+p2 <- make_trace_plot(out_OR_WE_final, "b1", subtitle = expression(b[1])) 
+
+# CP: Gompertz-Makeham — trace plots for b0, b1, c
+p3 <- make_trace_plot(out_CP_GM_final, "b0", expression(b[0]))
+p4 <- make_trace_plot(out_CP_GM_final, "b1", subtitle = expression(b[1]))
+p5 <- make_trace_plot(out_CP_GM_final, "c",  subtitle = "c (Makeham)") 
+
+fig_S1 <- grid.arrange(p1, p2, ncol = 2, nrow = 1)
+fig_S2 <- grid.arrange( p3, p4, p5, ncol = 3, nrow = 1)
+
+ggsave(here("outputs", "figures", "Figure_S1_convergence_OR.png"),
+       fig_S1, width = 12, height = 7, dpi = 300)
+ggsave(here("outputs", "figures", "Figure_S1_convergence_OR.pdf"),
+       fig_S1, width = 12, height = 7)
+ggsave(here("outputs", "figures", "Figure_S2_convergence_CP.png"),
+       fig_S2, width = 12, height = 7, dpi = 300)
+ggsave(here("outputs", "figures", "Figure_S2_convergence_CP.pdf"),
+       fig_S2, width = 12, height = 7)
+```
+
+# 17. OR model robustness: Weibull simple vs Gompertz-Makeham
+
+Weibull simple was the best fit for OR (Section 8). We tested Gompertz-Makeham
+to assess whether it could be used instead to allow direct parameter comparison
+with CP. However, the two models produce divergent mortality trajectories over
+biologically relevant ages (<=14 years), confirming that Gompertz-Makeham is a
+poor fit for OR and that population-specific best-fitting models must be used.
+Cross-population comparisons therefore rely on model-agnostic outputs
+(life expectancy, mortality at key ages) rather than parameter estimates.
+
+```{r or-model-comparison, eval=FALSE}
+out_OR_GM <- basta(
+  object = inputMat_OR, studyStart = 2000, studyEnd = 2024,
+  model = "GO", shape = "Makeham", minAge = 2,
+  recaptureType = "year",
+  nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
+  updateJumps = TRUE, lifeTable = TRUE)
+
+saveRDS(out_OR_GM, here("basta_outputs", "out_OR_GM.rds"))
+```
+
+```{r or-model-comparison-results}
+out_OR_GM <- readRDS(here("basta_outputs", "out_OR_GM.rds"))
+out_OR_WE <- readRDS(here("basta_outputs", "out_OR_WE_final.rds"))
+
+extract_mort_curve <- function(basta_out, model_label, max_age = 14) {
+  data.frame(
+    age       = basta_out$x,
+    mortality = basta_out$mort$nocov["Mean", ],
+    lower     = basta_out$mort$nocov["2.5%", ],
+    upper     = basta_out$mort$nocov["97.5%", ],
+    model     = model_label) %>%
+    filter(age <= max_age)
+}
+
+mort_compare <- bind_rows(
+  extract_mort_curve(out_OR_GM, "Gompertz-Makeham"),
+  extract_mort_curve(out_OR_WE, "Weibull simple"))
+
+ggplot(mort_compare, aes(x = age, y = mortality, color = model, fill = model)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("Gompertz-Makeham" = "#E69F00", "Weibull simple" = "#56B4E9")) +
+  scale_fill_manual(values  = c("Gompertz-Makeham" = "#E69F00", "Weibull simple" = "#56B4E9")) +
+  labs(x = "Age (years)", y = "Mortality rate \u03bc(x)",
+       title = "Warm lowland: Gompertz-Makeham vs Weibull simple (ages 0-14)") +
+  theme_classic() +
+  theme(legend.position = "top")
+
+# Quantify divergence between models
+mort_wide <- inner_join(
+  extract_mort_curve(out_OR_GM, "GM") %>% select(age, mort_GM = mortality),
+  extract_mort_curve(out_OR_WE, "WE") %>% select(age, mort_WE = mortality),
+  by = "age")
+
+cat("Correlation (ages 0-14):", round(cor(mort_wide$mort_GM, mort_wide$mort_WE), 4), "\n")
+cat("Mean abs % difference:",
+    round(mean(abs(mort_wide$mort_GM - mort_wide$mort_WE) /
+               ((mort_wide$mort_GM + mort_wide$mort_WE) / 2)) * 100, 2), "%\n")
+
+# Both models detect senescence (b1 > 0 for GM; b1 > 1 for Weibull)
+cat("\nGompertz-Makeham b1 (OR):\n")
+print(out_OR_GM$coefficients["b1", c("Mean", "Lower95%CI", "Upper95%CI")])
+cat("Weibull simple b1 (OR):\n")
+print(out_OR_WE$coefficients["b1", c("Mean", "Lower95%CI", "Upper95%CI")])
+```
+
+# 18. Proxy for dead — gap analysis
+```{r gap-analysis}
+# Use a separate object to avoid overwriting data used in BaSTA analysis
+# Remove 2023-2024 as too recent to assess the "returned after 2 years" pattern
+data_gaps <- data %>%
+  filter(year <= 2022) %>%
+  # Retain rows with complete data on columns needed for gap analysis only
+  filter(!is.na(femid) & !is.na(year) & !is.na(site)) %>%
+  arrange(femid, site, year)
+
+# Calculate year gaps for each individual
+gap_analysis <- data_gaps %>%
+  group_by(femid, site) %>%
+  arrange(year) %>%
+  mutate(
+    next_year  = lead(year),
+    year_gap   = next_year - year,
+    is_last_observation = is.na(next_year)) %>%
+  ungroup()
+
+# Identify females that missed 2+ years but then returned
+# year_gap >= 3: seen in year X and year X+3 means years X+1 and X+2 were missed
+returned_after_2yrs <- gap_analysis %>%
+  filter(year_gap >= 3) %>%
+  select(femid, site, year, next_year, year_gap)
+
+# Summary by site
+summary_stats <- gap_analysis %>%
+  group_by(site) %>%
+  summarise(
+    total_females       = n_distinct(femid),
+    total_observations  = n(),
+    mean_gap            = mean(year_gap[!is_last_observation], na.rm = TRUE),
+    median_gap          = median(year_gap[!is_last_observation], na.rm = TRUE),
+    max_gap             = max(year_gap[!is_last_observation], na.rm = TRUE),
+    n_gaps_2plus_missed = sum(year_gap >= 3, na.rm = TRUE),  # 2+ years missed
+    n_gaps_1yr_missed   = sum(year_gap == 2, na.rm = TRUE),  # 1 year missed
+    prop_consecutive    = sum(year_gap == 1, na.rm = TRUE) / sum(!is_last_observation))
+
+print(summary_stats)
+
+cat("\nNumber of instances where females returned after 2+ years missing:\n")
+print(table(returned_after_2yrs$site))
+
+cat("\nFemales that returned after missing 2+ years:\n")
+print(returned_after_2yrs)
+
+# Recapture probability
+recapture_prob <- gap_analysis %>%
+  filter(!is_last_observation) %>%
+  group_by(site) %>%
+  summarise(
+    prob_recap_next_year    = sum(year_gap == 1) / n(),
+    prob_recap_within_2yrs  = sum(year_gap <= 2) / n())
+
+cat("\nRecapture probabilities:\n")
+print(recapture_prob)
+
+# Distribution of maximum gap before returning, per individual
+max_gaps <- gap_analysis %>%
+  filter(!is_last_observation) %>%
+  group_by(femid, site) %>%
+  summarise(max_gap_before_return = max(year_gap, na.rm = TRUE)) %>%
+  ungroup()
+
+gap_distribution <- max_gaps %>%
+  group_by(site) %>%
+  count(max_gap_before_return) %>%
+  mutate(prop = n / sum(n))
+
+cat("\nDistribution of maximum gaps before returning:\n")
+print(gap_distribution)
+
+# Visualization
+p_gaps <- ggplot(gap_distribution, 
+                 aes(x = max_gap_before_return, y = prop, fill = site)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = site_colors) +
+  labs(x = "Years missed before returning",
+       y = "Proportion of females",
+       title = "Maximum gap length before individuals returned") +
+  theme_publication +
+  theme(legend.position = "top")
+
+p_gaps
+
+ggsave(here("outputs", "figures", "Figure_gap_analysis.png"),
+       p_gaps, width = 6, height = 5, dpi = 300)
+ggsave(here("outputs", "figures", "Figure_gap_analysis.pdf"),
+       p_gaps, width = 6, height = 5)
+
+# Percentages for supplementary text
+gap_analysis %>%
+  filter(!is_last_observation) %>%
+  group_by(site) %>%
+  summarise(
+    total_observable_gaps = n(),
+    gaps_2plus_yrs_missed = sum(year_gap >= 3),
+    percent_2plus         = round((sum(year_gap >= 3) / n()) * 100, 1))
+
+# Temporal pattern of returns
+returned_after_2yrs %>%
+  group_by(site) %>%
+  summarise(
+    earliest_year = min(year),
+    latest_year   = max(year),
+    median_year   = median(year))
+```

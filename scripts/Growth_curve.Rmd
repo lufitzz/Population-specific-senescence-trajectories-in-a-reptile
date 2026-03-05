@@ -1,0 +1,434 @@
+---
+title: "Growth Curve Analysis 2025"
+author: "Luisa Fitzpatrick"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+  word_document: default
+---
+
+```{r load-packages, message = FALSE, warning = FALSE}
+library(here)
+library(nlme)
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(effsize)
+library(flextable)
+library(officer)
+# Note: MASS is used via MASS::mvrnorm() in the bootstrap functions
+```
+
+## Prepare data
+
+```{r prepare-data}
+# Read full dataset including juveniles
+growth_data_all <- read.csv(here("data", "processed", "growth_data.csv"), 
+                        na.strings = c("", ",", "NA", "."), 
+                        header = TRUE)
+
+# Filter to adults (age >= 2) for von Bertalanffy models
+# Age 2 is the approximate age of first reproduction in this species,
+# so VB models are fitted to post-maturation growth only
+growth_data <- growth_data_all %>% 
+  filter(!is.na(FSVLAFTER), !is.na(SITE.), 
+         !is.na(Age), !is.na(FEMID.),
+         Age >= 2)
+
+# Check sample sizes by age and site
+table(growth_data$Age, growth_data$SITE.)
+
+# Separate by site for site-specific model fitting
+growth_data_OR <- growth_data %>% filter(SITE. == "OR")
+growth_data_CP <- growth_data %>% filter(SITE. == "CP")
+```
+
+## Summary statistics
+
+```{r summary-stats}
+summary_stats <- tibble(
+  Population = c("Overall", "Warm lowland (OR)", "Cool highland (CP)"),
+  Observations = c(nrow(growth_data), nrow(growth_data_OR), nrow(growth_data_CP)),
+  Individuals = c(length(unique(growth_data$FEMID.)),
+                  length(unique(growth_data_OR$FEMID.)),
+                  length(unique(growth_data_CP$FEMID.))),
+  Age_min = c(min(growth_data$Age), min(growth_data_OR$Age), min(growth_data_CP$Age)),
+  Age_max = c(max(growth_data$Age), max(growth_data_OR$Age), max(growth_data_CP$Age)),
+  Mean_obs_per_ind = c(
+    round(mean(table(growth_data$FEMID.)), 1),
+    round(mean(table(growth_data_OR$FEMID.)), 1),
+    round(mean(table(growth_data_CP$FEMID.)), 1)),
+  Obs_range_per_ind = c(
+    paste0(min(table(growth_data$FEMID.)), "-", max(table(growth_data$FEMID.))),
+    paste0(min(table(growth_data_OR$FEMID.)), "-", max(table(growth_data_OR$FEMID.))),
+    paste0(min(table(growth_data_CP$FEMID.)), "-", max(table(growth_data_CP$FEMID.)))))
+
+kable(summary_stats, digits = 1, 
+      caption = "Summary statistics for adult growth data (age >= 2)")
+```
+
+## Fit mixed-effects von Bertalanffy models
+
+Von Bertalanffy growth models were fitted using nonlinear mixed effects (nlme), with
+individual identity (FEMID) as a random effect on the asymptotic size parameter (Linf).
+This accounts for repeated measurements on the same individual and allows individuals
+to vary in their asymptotic size while sharing common growth rate (K) and theoretical
+age at zero size (t0) parameters at the population level. Models fitted by maximum
+likelihood to allow AIC comparison.
+
+```{r fit-vb-OR}
+# ORFORD (warm lowland population)
+fit_vb_OR <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+summary(fit_vb_OR)
+intervals(fit_vb_OR)  # 95% CIs for fixed effects
+```
+
+```{r fit-vb-CP}
+# CENTRAL PLATEAU (cool highland population)
+fit_vb_CP <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+summary(fit_vb_CP)
+intervals(fit_vb_CP)
+```
+
+## Model diagnostics
+
+```{r diagnostic-function}
+# Function to produce standard diagnostic plots for nlme models
+check_nlme_diagnostics <- function(model, title) {
+  
+  par(mfrow = c(2, 2))
+  
+  # 1. Residuals vs Fitted - checks for systematic patterns (non-linearity, bias)
+  plot(fitted(model), residuals(model, type = "pearson"),
+       xlab = "Fitted values", ylab = "Pearson residuals",
+       main = paste(title, "- Residuals vs Fitted"))
+  abline(h = 0, col = "red", lty = 2)
+  lines(lowess(fitted(model), residuals(model, type = "pearson")), 
+        col = "blue", lwd = 2)
+  
+  # 2. QQ plot - checks normality of residuals
+  qqnorm(residuals(model, type = "pearson"), 
+         main = paste(title, "- Normal Q-Q"))
+  qqline(residuals(model, type = "pearson"), col = "red")
+  
+  # 3. Scale-Location - checks homoscedasticity (constant variance)
+  plot(fitted(model), sqrt(abs(residuals(model, type = "pearson"))),
+       xlab = "Fitted values", ylab = "sqrt|Pearson residuals|",
+       main = paste(title, "- Scale-Location"))
+  lines(lowess(fitted(model), sqrt(abs(residuals(model, type = "pearson")))), 
+        col = "blue", lwd = 2)
+  
+  # 4. Histogram - visualises residual distribution
+  hist(residuals(model, type = "pearson"), breaks = 20,
+       main = paste(title, "- Residual Distribution"),
+       xlab = "Pearson residuals")
+  
+  par(mfrow = c(1, 1))
+  
+  # Shapiro-Wilk test for normality of residuals
+  # Note: at large sample sizes (n > 400) this test is highly sensitive and
+  # significant results should be interpreted alongside visual diagnostics
+  cat("\n", title, "- Shapiro-Wilk test for normality:\n")
+  print(shapiro.test(residuals(model, type = "pearson")))
+}
+```
+
+```{r diagnostics-OR}
+check_nlme_diagnostics(fit_vb_OR, "OR")
+# OR diagnostics: Shapiro-Wilk is significant (p = 0.001) but visual inspection
+# of the QQ plot shows only minor deviation at the tails, with residuals 
+# following the theoretical line closely across the bulk of the distribution.
+# Given the large sample size (n = 467), this level of Shapiro-Wilk sensitivity
+# is expected and does not indicate a meaningful violation. Residuals vs fitted
+# and scale-location plots show no systematic patterns.
+```
+
+```{r diagnostics-CP}
+check_nlme_diagnostics(fit_vb_CP, "CP")
+# CP diagnostics: Both Shapiro-Wilk (p = 2.9e-13) and visual inspection indicate
+# more substantial departure from normality, with heavy tails on the QQ plot and
+# a possible outlier at ~4 Pearson residuals. The scale-location plot suggests
+# mild heteroscedasticity (increasing variance with fitted values).
+# Testing variance structures below to assess whether this can be improved.
+```
+
+```{r diagnostics-random-effects}
+# Check normality of random effects (individual-level Linf deviations)
+# These should also be approximately normal for valid inference
+par(mfrow = c(1, 2))
+qqnorm(ranef(fit_vb_OR)[,1], main = "OR - Random Effects Q-Q")
+qqline(ranef(fit_vb_OR)[,1], col = "red")
+qqnorm(ranef(fit_vb_CP)[,1], main = "CP - Random Effects Q-Q")
+qqline(ranef(fit_vb_CP)[,1], col = "red")
+par(mfrow = c(1, 1))
+# Random effects are approximately normally distributed for both populations.
+```
+
+## Test variance structures for CP heteroscedasticity
+
+The CP model showed mild heteroscedasticity in residual diagnostics.
+Two variance structures were tested to assess whether explicit variance
+modelling could improve fit: varPower and varExp (both as functions of
+fitted values).
+```{r CP-variance-structures}
+# Model 2: variance as power function of fitted values
+fit_vb_CP_power <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  weights = varPower(form = ~fitted(.)),
+  start = c(Linf = 89, K = 0.044, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+# Note: model produced a convergence warning during fitting
+
+# Model 3 (varExp) failed to converge entirely (maxIter = 200 reached),
+# indicating the exponential variance structure is not supported by these data.
+
+# Compare base model vs power variance model
+AIC(fit_vb_CP, fit_vb_CP_power)
+summary(fit_vb_CP_power)
+
+# Assessment: despite deltaAIC ~ 5 in favour of varPower, the model produced
+# a degenerate solution - residual SD collapsed to ~0 (1.59e-07) with an
+# implausibly large power parameter (~3.78), indicating the variance function
+# absorbed all residual variance rather than capturing meaningful heteroscedasticity.
+# The convergence warning and complete failure of varExp to converge further
+# indicate this heteroscedasticity is not sufficiently structured to support
+# explicit variance modelling.
+# Base model retained; mild heteroscedasticity noted as a limitation.
+# Fixed effect estimates are unlikely to be materially biased (n = 568).
+fit_vb_CP_final <- fit_vb_CP
+```
+
+
+## Model selection: compare VB, logistic, and Gompertz
+
+Three commonly used growth functions were compared by AIC to confirm VB as the
+most appropriate functional form for each population.
+
+```{r model-comparison}
+# Logistic growth: FSVLAFTER = Linf / (1 + exp(-K * (Age - t0)))
+fit_log_OR <- nlme(
+  FSVLAFTER ~ Linf / (1 + exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.5, t0 = 1),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+fit_log_CP <- nlme(
+  FSVLAFTER ~ Linf / (1 + exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.5, t0 = 1),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# Gompertz growth: FSVLAFTER = Linf * exp(-exp(-K * (Age - t0)))
+fit_gomp_OR <- nlme(
+  FSVLAFTER ~ Linf * exp(-exp(-K * (Age - t0))),
+  data = growth_data_OR,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 74, K = 0.5, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+fit_gomp_CP <- nlme(
+  FSVLAFTER ~ Linf * exp(-exp(-K * (Age - t0))),
+  data = growth_data_CP,
+  fixed = Linf + K + t0 ~ 1,
+  random = Linf ~ 1 | FEMID.,
+  start = c(Linf = 89, K = 0.5, t0 = 0),
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+# AIC comparison within each population
+AIC(fit_vb_OR, fit_log_OR, fit_gomp_OR)
+AIC(fit_vb_CP, fit_log_CP, fit_gomp_CP)
+
+# All three models have deltaAIC < 2 within each population, indicating
+# they are statistically indistinguishable in fit. VB was selected as the
+# preferred model on the basis of biological convention (widely used for
+# reptile growth) and interpretability of parameters (Linf, K, t0),
+# not statistical superiority.
+```
+
+## Site comparison: combined model
+
+A single combined model with site-specific fixed effects for all three parameters
+was used to formally test whether growth parameters differed between populations.
+CP is the reference level (alphabetical ordering), so intercepts represent CP
+estimates and SiteOR coefficients represent OR deviations from CP.
+
+```{r combined-model}
+growth_data_both <- growth_data %>%
+  mutate(Site = factor(SITE.))
+# Note: factor() will set CP as reference level (alphabetical order)
+# Intercepts = CP estimates; SiteOR coefficients = difference (OR - CP)
+
+fit_combined <- nlme(
+  FSVLAFTER ~ Linf * (1 - exp(-K * (Age - t0))),
+  data = growth_data_both,
+  fixed = list(Linf ~ Site, K ~ Site, t0 ~ Site),
+  random = Linf ~ 1 | FEMID.,
+  start = c(81, -12, 0.41, -0.13, -2.35, -2.83),
+  # start values: Linf_CP, Linf diff(OR-CP), K_CP, K diff(OR-CP), t0_CP, t0 diff(OR-CP)
+  control = nlmeControl(maxIter = 200, msMaxIter = 200))
+
+summary(fit_combined)
+
+# Sequential F-tests for significance of site differences in each parameter
+anova(fit_combined)
+# CP has significantly larger asymptotic size (Linf) and faster growth rate (K) than OR.
+# t0 also differs significantly between sites, though the effect is smaller.
+# OR approaches its (lower) asymptote more slowly than CP approaches its (larger) asymptote.
+```
+
+## Results table
+
+```{r results-table}
+
+# --- Table 1: VB parameters with 95% CIs ---
+results_table <- tibble(
+  Population = rep(c("Warm lowland (OR)", "Cool highland (CP)"), each = 3),
+  Parameter = rep(c("Linf (mm)", "K (year-1)", "t0 (year)"), 2),
+  Estimate = c(fixef(fit_vb_OR), fixef(fit_vb_CP_final)),
+  Lower_95CI = c(intervals(fit_vb_OR)$fixed[,"lower"], 
+                 intervals(fit_vb_CP_final)$fixed[,"lower"]),
+  Upper_95CI = c(intervals(fit_vb_OR)$fixed[,"upper"], 
+                 intervals(fit_vb_CP_final)$fixed[,"upper"])) %>%
+  mutate(across(c(Estimate, Lower_95CI, Upper_95CI), ~round(., 3)))
+
+# --- Table 2: ANOVA results for site differences ---
+anova_results <- as.data.frame(anova(fit_combined)) %>%
+  tibble::rownames_to_column("Term") %>%
+  filter(grepl("Site", Term)) %>%
+  mutate(
+    Parameter = c("Linf (mm)", "K (year-1)", "t0 (year)"),
+    F_value = round(`F-value`, 1),
+    p_value = c("<0.001", "<0.001", "0.017")
+  ) %>%
+  dplyr::select(Parameter, numDF, denDF, F_value, p_value)
+
+# --- Save both tables to Word ---
+ft1 <- flextable(results_table) %>%
+  set_caption("Von Bertalanffy growth parameters and 95% CIs for each population")
+
+ft2 <- flextable(anova_results) %>%
+  set_caption("Population differences in von Bertalanffy growth parameters (F-tests from combined model)")
+
+doc <- read_docx() %>%
+  body_add_par("Table 1: Growth parameters", style = "heading 1") %>%
+  body_add_flextable(ft1) %>%
+  body_add_par("") %>%
+  body_add_par("Table 2: Population comparisons", style = "heading 1") %>%
+  body_add_flextable(ft2)
+
+print(doc, target = here("outputs", "tables", "Supp_growth.docx"))
+```
+
+
+## Early growth comparison (ages 0-2 years)
+
+To determine whether population differences in growth are present from birth and
+through the pre-reproductive phase, SVL was compared between populations at age
+0.01 years (all offspring born in the lab are measured at birth, n = 1660 OR and 2250 CP)
+and a subset of juveniles that were recaptured for survival analysis in Spring following 
+their first winter dormant period (approximate age 0.75, n = 187).
+
+Only these two discrete age classes are available prior to adulthood reflecting the measurement schedule of the long-term study. A linear mixed effects model would be preferable to account for individual identity, but of the offspring born (age 0.01, only approx 20% survive to age 2, so we cannot include ID). A linear model fit to two data points is unsuitable therefore we use a simple t-test between the two populations at the two juvenile age classes. As the sample size at birth is very large (n > 4000 across age classes), even small differences will be statistically
+significant, and effect sizes should be interpreted alongside the model output.
+
+```{r early-growth-data}
+
+# --- Split into two age classes ---
+
+birth_data <- growth_data_all %>% 
+  filter(Age == 0.01) %>%
+  mutate(Site = factor(SITE., levels = c("OR", "CP")))
+
+juvenile_data <- growth_data_all %>% 
+  filter(Age == 0.75) %>%
+  mutate(Site = factor(SITE., levels = c("OR", "CP")))
+
+# --- Check sample sizes ---
+cat("Birth sample sizes:\n")
+table(birth_data$Site)
+cat("\nJuvenile sample sizes:\n")
+table(juvenile_data$Site)
+
+# --- Descriptive statistics ---
+birth_data %>%
+  group_by(Site) %>%
+  summarise(n = n(),
+            mean_SVL = mean(FSVLAFTER, na.rm = TRUE),
+            sd_SVL = sd(FSVLAFTER, na.rm = TRUE),
+            se_SVL = sd_SVL / sqrt(n))
+
+juvenile_data %>%
+  group_by(Site) %>%
+  summarise(n = n(),
+            mean_SVL = mean(FSVLAFTER, na.rm = TRUE),
+            sd_SVL = sd(FSVLAFTER, na.rm = TRUE),
+            se_SVL = sd_SVL / sqrt(n))
+
+# --- Welch's t-tests ---
+t_birth <- t.test(FSVLAFTER ~ Site, data = birth_data, var.equal = FALSE)
+t_juvenile <- t.test(FSVLAFTER ~ Site, data = juvenile_data, var.equal = FALSE)
+
+print(t_birth)
+print(t_juvenile)
+
+# --- Effect sizes (Cohen's d) ---
+
+d_birth <- cohen.d(FSVLAFTER ~ Site, data = birth_data)
+d_juvenile <- cohen.d(FSVLAFTER ~ Site, data = juvenile_data)
+
+print(d_birth)
+print(d_juvenile)
+
+# --- Summary table ---
+results_early_growth <- data.frame(
+  Age_class = c("Birth (~0.01 years)", "Post-winter (~0.75 years)"),
+  n_OR = c(nrow(filter(birth_data, Site == "OR")),
+            nrow(filter(juvenile_data, Site == "OR"))),
+  n_CP = c(nrow(filter(birth_data, Site == "CP")),
+            nrow(filter(juvenile_data, Site == "CP"))),
+  mean_OR = c(mean(filter(birth_data, Site == "OR")$FSVLAFTER),
+               mean(filter(juvenile_data, Site == "OR")$FSVLAFTER)),
+  mean_CP = c(mean(filter(birth_data, Site == "CP")$FSVLAFTER),
+               mean(filter(juvenile_data, Site == "CP")$FSVLAFTER)),
+  t_stat = c(t_birth$statistic, t_juvenile$statistic),
+  df = c(t_birth$parameter, t_juvenile$parameter),
+  p_value = c(t_birth$p.value, t_juvenile$p.value),
+  cohens_d = c(d_birth$estimate, d_juvenile$estimate)
+) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+print(results_early_growth)
+
+```
+
+# For publication plot see Figure 2 script Panel A
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```

@@ -2,9 +2,9 @@
 
 Code repository accompanying the manuscript:
 
-**[Manuscript title]**  
-[Author list]  
-*Functional Ecology* (in review)
+**[Seasonality drives population-specific senescence trajectories in a reptile]**  
+[LJ Fitzpatrick*, H Cayuela, M Olsson, GM While and E Wapstra]  
+*Functional Ecology* (pre submission)
 
 ---
 
@@ -26,33 +26,28 @@ outputs/     Generated figures
 
 ## Scripts
 
-Run scripts 01–04 before 05–06 (figures depend on prior outputs).
-Scripts 01–04 can otherwise be run independently.
+Run scripts 01–03 before 04 (figures depend on prior outputs).
+Scripts 01–03 can otherwise be run independently.
 
 | Script | Description |
 |--------|-------------|
-| 01_growth_curves.Rmd | Von Bertalanffy growth curve analysis |
-| 02_actuarial_senescence.Rmd | BaSTA survival and mortality modelling |
-| 03_reproductive_senescence.Rmd | Reproductive senescence BaFTA modelling |
-| 04_proxy_dead_supplementary.Rmd | Proxy-for-dead supplementary analysis |
-| 05_figure_multipanel_species.Rmd | Multipanel figure including species photo |
-| 06_figure_basta_bafta.Rmd | Four-panel growth curve repro and BaSTA/BaFTA output figure |
+| 01_Actuarial_senescence_BaSTA.Rmd | Survival and mortality modelling |
+| 02_Reproductive_senescence_BaFTA.Rmd | Reproductive senescence modelling |
+| 03_Growth_curve.Rmd | Von Bertalanffy growth curve analysis |
+| 04_Manuscript_figures.Rmd | 2 Multipanel figures |
 
 ---
 
 ## Data
 
-The full 25-year mark-recapture dataset is held by the Olsson/Wapstra 
-research groups at the University of Tasmania and is available on 
-reasonable request. This repository contains only the processed data 
-subsets required to reproduce each analysis.
+The full 25-year mark-recapture dataset is held by the Behavioural and Evolutionary Ecology research group at the University of Tasmania and is available on reasonable request. This repository contains only the processed data subsets required to reproduce each analysis.
 
 ---
 
 ## Software
 
-R version [x.x.x]  
-Key packages: [you can fill these in at the end — e.g. BaSTA, lme4, ggplot2]
+R version [4.5.1]  
+Key packages: [fill these in at the end — e.g. BaSTA, lme4, ggplot2]
 
 ---
 
