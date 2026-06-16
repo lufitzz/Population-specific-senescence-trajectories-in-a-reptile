@@ -4,10 +4,12 @@ author: "Luisa Fitzpatrick"
 date: "`r Sys.Date()`"
 output:
   html_document:
-    toc: true
-    toc_float: true
+    toc: yes
+    toc_float: yes
     code_folding: show
     theme: flatly
+  pdf_document:
+    toc: yes
 ---
 
 ```{r setup, include=FALSE}
@@ -29,6 +31,7 @@ library(terra)
 library(sf)
 library(geodata)
 library(magick)
+library(elevatr)
 ```
 
 ---
@@ -58,21 +61,28 @@ site_labels <- c("OR" = "Lowland", "CP" = "Highland")
 ## Panel A — Species photo
 
 ```{r fig1-panelA}
-photo_species <- magick::image_read(here("images", "ocellatus.jpg"))
+photo_species <- magick::image_read(here("figures", "images", "ocellatus.jpg"))
 p_species <- ggdraw() + draw_image(photo_species)
 ```
 
 ## Panel B — Tasmania elevation map
 
 ```{r fig1-panelB, message=FALSE}
-# Download elevation (cached to tempdir after first run)
-elev     <- elevation_30s(country = "AUS", path = tempdir())
+# Define Tasmania bounding box as sf object
+tas_bbox <- st_as_sf(data.frame(
+  lon = c(144.5, 148.5),
+  lat = c(-43.7, -40.0)),
+  coords = c("lon", "lat"), crs = 4326)
+
+# Download elevation via elevatr (AWS-backed, no geodata server needed)
+elev     <- get_elev_raster(tas_bbox, z = 7)
+elev     <- rast(elev)  # convert to terra SpatRaster
 tas_ext  <- ext(144.5, 148.5, -43.7, -40.0)
 elev_tas <- crop(elev, tas_ext)
-
 elev_df  <- as.data.frame(elev_tas, xy = TRUE)
 colnames(elev_df) <- c("lon", "lat", "elevation")
 elev_df  <- elev_df[!is.na(elev_df$elevation), ]
+elev_df  <- elev_df[elev_df$elevation > 0, ]   # remove ocean/bathymetry
 
 sites <- data.frame(
   name = c("Highland", "Lowland"),
@@ -82,8 +92,10 @@ sites <- data.frame(
 map1 <- ggplot() +
   geom_raster(data = elev_df, aes(x = lon, y = lat, fill = elevation)) +
   scale_fill_gradientn(
-    colours = terrain.colors(10),
-    name    = "Elevation (m)") +
+    colours  = terrain.colors(10),
+    name     = "Elevation (m)",
+    limits   = c(0, 1500),
+    na.value = "lightblue") +
   geom_point(data = sites, aes(x = lon, y = lat),
              shape = 21, fill = c("cornflowerblue", "coral1"),
              color = "black", size = 5, stroke = 1.2) +
@@ -93,19 +105,17 @@ map1 <- ggplot() +
            crs = 4326, expand = FALSE, datum = sf::st_crs(4326)) +
   theme_void(base_size = 11) +
   theme(
-    # Extra margins so the elevation legend is never clipped
-    plot.margin          = margin(12, 8, 15, 8),
-    legend.position      = "bottom",
-    legend.direction     = "horizontal",
-    legend.background    = element_rect(fill = "white", color = NA),
-    legend.title         = element_text(size = 10),
-    legend.text          = element_text(size = 9),
-    legend.key.width     = unit(1.0, "cm"),
-    legend.key.height    = unit(0.3, "cm"),
-    legend.margin        = margin(4, 0, 0, 0),
-    legend.box.margin    = margin(0, 0, 0, 0),
-    plot.clip            = "off")
-
+    plot.margin       = margin(12, 8, 15, 8),
+    legend.position   = "bottom",
+    legend.direction  = "horizontal",
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.title      = element_text(size = 10),
+    legend.text       = element_text(size = 9),
+    legend.key.width  = unit(1.0, "cm"),
+    legend.key.height = unit(0.3, "cm"),
+    legend.margin     = margin(4, 0, 0, 0),
+    legend.box.margin = margin(0, 0, 0, 0),
+    plot.clip         = "off")
 map1
 ```
 
@@ -292,12 +302,12 @@ ggsave(here("figures", "Figure1_StudySystem.pdf"),
 
 **Required files:**
 
-- `bafta_outputs/out_CM_CP.rds`
-- `bafta_outputs/out_CM_OR.rds`
-- `basta_outputs/out_CP_GM.rds`
-- `basta_outputs/out_OR_WE.rds`
+- `outputs/bafta_outputs/out_CM_CP.rds`
+- `outputs/bafta_outputs/out_CM_OR.rds`
+- `outputs/basta_outputs/out_CP_GM.rds`
+- `outputs/basta_outputs/out_OR_WE_final.rds`
 - `data/growth_data.csv`
-- `data/reproductive_data5.csv`
+- `data/reproductive_data.csv`
 
 ```{r figure2-data}
 
@@ -312,12 +322,12 @@ theme_publication <- theme_classic(base_size = 11) +
         legend.title = element_blank())
 
 # ── Load BaFTA outputs ────────────────────────────────────────────────────────
-out_CM_CP <- readRDS(here("bafta_outputs", "out_CM_CP.rds"))
-out_CM_OR <- readRDS(here("bafta_outputs", "out_CM_OR.rds"))
+out_CM_CP <- readRDS(here("outputs", "bafta_outputs", "out_CM_CP.rds"))
+out_CM_OR <- readRDS(here("outputs", "bafta_outputs", "out_CM_OR.rds"))
 
 # ── Load BaSTA outputs ────────────────────────────────────────────────────────
-out_CP_GM    <- readRDS(here("basta_outputs", "out_CP.rds"))      # Highland
-out_OR_WE <- readRDS(here("basta_outputs", "out_OR_WE.rds"))   # Lowland
+out_CP_GM    <- readRDS(here("outputs", "basta_outputs", "out_CP_GM_final.rds"))      # Highland
+out_OR_WE_final <- readRDS(here("outputs", "basta_outputs", "out_OR_WE_final.rds"))   # Lowland
 
 # ── Load main dataset ─────────────────────────────────────────────────────────
 data <- read.csv(here("data", "processed", "reproductive_data.csv"),
@@ -560,7 +570,7 @@ calculate_hazard_WE <- function(basta_out, site_name, ages = 2:12) {
       .groups = "drop")
 }
 
-haz_OR <- calculate_hazard_WE(out_OR_WE, "Lowland")
+haz_OR <- calculate_hazard_WE(out_OR_WE_final, "Lowland")
 haz_CP <- calculate_hazard_GM(out_CP_GM, "Highland")
 haz_data <- bind_rows(haz_OR, haz_CP)
 

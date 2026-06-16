@@ -1,0 +1,49 @@
+# Data description
+
+Data supporting: Fitzpatrick LJ, Cayuela H, Olsson M, While GM, Wapstra E.
+Actuarial senescence and reproduction diverge across contrasting thermal 
+environments in a wild ectotherm. Ecology Letters (submitted 2026).
+
+Species: Carinascincus ocellatus (spotted snow skink)
+Populations: Warm lowland (OR = Orford) and 
+             Cool highland (CP = Central Plateau), Tasmania, Australia
+Study period: 2000–2024
+
+---
+
+## Data files
+
+### BOM.csv
+Daily climate records from Bureau of Meteorology weather stations 
+Liawenee (96033, highland) and Orford (92027, lowland), 2001–2023.
+Columns: Site (OR = warm lowland, CP = cool highland), Year, Month, Day, 
+         Maxtemp (°C), Mintemp (°C), Rainfall (mm)
+
+### census_data.csv
+Individual female capture-recapture records, 2000–2024.
+Used as input for Bayesian Survival Trajectory Analysis (BaSTA).
+Columns: Year, FemID (female identifier), Site (OR = warm lowland, CP = cool highland),
+         Age (years), DeathYear (confirmed death; 
+         NA = individual not observed to die, i.e. right-censored)
+
+### growth_data.csv
+Body size measurements for C. ocellatus across all life stages.
+Columns: FCODE (female toe code), FEMID (female identifier), 
+         Site (OR = warm lowland, CP = cool highland),
+         Age (years), FSVLAFTER (snout-vent length, mm)
+Note: Age 0.01 = measurement at birth; Age 0.75 = post-winter juvenile measurement.
+      FEMID and FCODE are blank for juveniles as individual IDs are assigned at maturity.
+
+### reproductive_data.csv
+Annual reproductive records for individually identified adult females.
+Columns: Year, FemID (female identifier), Site (OR = warm lowland, CP = cool highland),
+         Age (years), Clutch (litter size = number of offspring at parturition)
+Note: Records with Clutch = 0 or NA are excluded from the processed dataset.
+      Zero litter sizes could not be distinguished from missing data as non-gravid 
+      status was not consistently recorded throughout the study period. Analyses 
+      therefore model conditional fertility (litter size given reproduction occurred).
+
+---
+
+## License
+CC-BY 4.0. See LICENSE file.

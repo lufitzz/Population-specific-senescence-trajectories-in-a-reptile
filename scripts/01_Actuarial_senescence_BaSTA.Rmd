@@ -42,9 +42,9 @@ data <- read.csv(here("data", "processed", "census_data.csv"),
     birth = year - Age,
     femid = as.factor(femid),
     site  = as.factor(site),
-    death = as.integer(death),  # NAs introduced here are expected: individuals
-    birth = as.integer(birth))  # with no recorded death year are right-censored
-                                # (death set to 0 in prepare_basta_input)
+    death = as.integer(death),  
+    birth = as.integer(birth)) 
+                                
 data <- data %>% filter(!is.na(femid))
 ```
 
@@ -99,11 +99,11 @@ multiout_CP <- multibasta(
   shapes  = c("simple", "Makeham"),
   nsim = 4, niter = 10000, burnin = 2000, thinning = 10, ncpus = 4)
 
-saveRDS(multiout_CP, here("basta_outputs", "multiout_CP.rds"))
+saveRDS(multiout_CP, here("outputs", "basta_outputs", "multiout_CP.rds"))
 ```
 
 ```{r load-multi-cp}
-multiout_CP <- readRDS(here("basta_outputs", "multiout_CP.rds"))
+multiout_CP <- readRDS(here("outputs", "basta_outputs", "multiout_CP.rds"))
 summary(multiout_CP, digits = 3)
 # Result: Gompertz-Makeham selected as best model by DIC
 ```
@@ -129,13 +129,13 @@ out_CP_tv <- basta(
   nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
   updateJumps = TRUE)
 
-saveRDS(out_CP_const, here("basta_outputs", "out_CP_const.rds"))
-saveRDS(out_CP_tv,    here("basta_outputs", "out_CP_tv.rds"))
+saveRDS(out_CP_const, here("outputs", "basta_outputs", "out_CP_const.rds"))
+saveRDS(out_CP_tv,    here("outputs", "basta_outputs", "out_CP_tv.rds"))
 ```
 
 ```{r recapture-dic-cp-results}
-out_CP_const <- readRDS(here("basta_outputs", "out_CP_const.rds"))
-out_CP_tv    <- readRDS(here("basta_outputs", "out_CP_tv.rds"))
+out_CP_const <- readRDS(here("outputs", "basta_outputs", "out_CP_const.rds"))
+out_CP_tv    <- readRDS(here("outputs", "basta_outputs", "out_CP_tv.rds"))
 
 cat("CP — Constant recapture DIC:", out_CP_const$DIC["DIC"], "\n")
 cat("CP — Time-varying recapture DIC:", out_CP_tv$DIC["DIC"], "\n")
@@ -159,11 +159,11 @@ out_CP_GM_final <- basta(
   nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
   updateJumps = TRUE, lifeTable = TRUE)
 
-saveRDS(out_CP_GM_final, here("basta_outputs", "out_CP_GM_final.rds"))
+saveRDS(out_CP_GM_final, here("outputs", "basta_outputs", "out_CP_GM_final.rds"))
 ```
 
 ```{r cp-results}
-out_CP_GM_final <- readRDS(here("basta_outputs", "out_CP_GM_final.rds"))
+out_CP_GM_final <- readRDS(here("outputs", "basta_outputs", "out_CP_GM_final.rds"))
 summary(out_CP_GM_final, digits = 3)
 
 cat("\nMortality parameters:\n")
@@ -204,11 +204,11 @@ multiout_OR <- multibasta(
   shapes  = c("simple", "Makeham"),
   nsim = 4, niter = 10000, burnin = 2000, thinning = 10, ncpus = 4)
 
-saveRDS(multiout_OR, here("basta_outputs", "multiout_OR.rds"))
+saveRDS(multiout_OR, here("outputs", "basta_outputs", "multiout_OR.rds"))
 ```
 
 ```{r load-multi-or}
-multiout_OR <- readRDS(here("basta_outputs", "multiout_OR.rds"))
+multiout_OR <- readRDS(here("outputs", "basta_outputs", "multiout_OR.rds"))
 summary(multiout_OR, digits = 3)
 # Result: WE simple selected as best model by DIC (4852), then WE Makeham (4863)
 ```
@@ -234,13 +234,13 @@ out_OR_WE_tv <- basta(
   nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
   updateJumps = TRUE)
 
-saveRDS(out_OR_WE_const, here("basta_outputs", "out_OR_WE_const.rds"))
-saveRDS(out_OR_WE_tv,    here("basta_outputs", "out_OR_WE_tv.rds"))
+saveRDS(out_OR_WE_const, here("outputs", "basta_outputs", "out_OR_WE_const.rds"))
+saveRDS(out_OR_WE_tv,    here("outputs", "basta_outputs", "out_OR_WE_tv.rds"))
 ```
 
 ```{r recapture-dic-or-results}
-out_OR_WE_const <- readRDS(here("basta_outputs", "out_OR_WE_const.rds"))
-out_OR_WE_tv    <- readRDS(here("basta_outputs", "out_OR_WE_tv.rds"))
+out_OR_WE_const <- readRDS(here("outputs", "basta_outputs", "out_OR_WE_const.rds"))
+out_OR_WE_tv    <- readRDS(here("outputs", "basta_outputs", "out_OR_WE_tv.rds"))
 
 cat("OR — Constant recapture DIC:", out_OR_WE_const$DIC["DIC"], "\n")
 cat("OR — Time-varying recapture DIC:", out_OR_WE_tv$DIC["DIC"], "\n")
@@ -267,11 +267,11 @@ out_OR_WE_final <- basta(
   nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
   updateJumps = TRUE, lifeTable = TRUE)
 
-saveRDS(out_OR_WE_final, here("basta_outputs", "out_OR_WE_final.rds"))
+saveRDS(out_OR_WE_final, here("outputs", "basta_outputs", "out_OR_WE_final.rds"))
 ```
 
 ```{r or-results}
-out_OR_WE_final <- readRDS(here("basta_outputs", "out_OR_WE_final.rds"))
+out_OR_WE_final <- readRDS(here("outputs", "basta_outputs", "out_OR_WE_final.rds"))
 summary(out_OR_WE_final, digits = 3)
 
 cat("\nMortality parameters:\n")
@@ -321,10 +321,6 @@ p_haz_overlay <- ggplot(haz_data, aes(x = age, y = mean, color = site, fill = si
 
 p_haz_overlay
 
-ggsave(here("outputs", "figures", "Figure_mortality_comparison.png"),
-       p_haz_overlay, width = 6, height = 5, dpi = 600)
-ggsave(here("outputs", "figures", "Figure_mortality_comparison.pdf"),
-       p_haz_overlay, width = 6, height = 5)
 ```
 
 # 12. Life expectancy and mortality at key ages
@@ -464,17 +460,15 @@ ft_CP <- flextable(params_CP) %>%
 ft_OR
 ft_CP
 
-save_as_docx(ft_OR, path = here("outputs", "tables", "Table_params_warm_lowland.docx"))
-save_as_docx(ft_CP, path = here("outputs", "tables", "Table_params_cool_highland.docx"))
 ```
 
-# 15. Life tables (Supplementary Tables S12–S13)
+# 15. Life tables (Supplementary Tables S4–S5)
 ```{r table-lifetables}
 for (info in list(
-  list(tbl = life_OR, pop = "Warm lowland",  cap = "Table S12",
-       file = here("outputs", "tables", "Table_S12_lifetable_warm_lowland.docx")),
-  list(tbl = life_CP, pop = "Cool highland", cap = "Table S13",
-       file = here("outputs", "tables", "Table_S13_lifetable_cool_highland.docx")))) {
+  list(tbl = life_OR, pop = "Warm lowland",  cap = "Table S4",
+       file = here("outputs", "tables", "Table_S4_lifetable_warm_lowland.docx")),
+  list(tbl = life_CP, pop = "Cool highland", cap = "Table S5",
+       file = here("outputs", "tables", "Table_S5_lifetable_cool_highland.docx")))) {
 
   tbl <- as.data.frame(info$tbl)
   tbl$Population <- info$pop
@@ -536,14 +530,6 @@ p5 <- make_trace_plot(out_CP_GM_final, "c",  subtitle = "c (Makeham)")
 fig_S1 <- grid.arrange(p1, p2, ncol = 2, nrow = 1)
 fig_S2 <- grid.arrange( p3, p4, p5, ncol = 3, nrow = 1)
 
-ggsave(here("outputs", "figures", "Figure_S1_convergence_OR.png"),
-       fig_S1, width = 12, height = 7, dpi = 300)
-ggsave(here("outputs", "figures", "Figure_S1_convergence_OR.pdf"),
-       fig_S1, width = 12, height = 7)
-ggsave(here("outputs", "figures", "Figure_S2_convergence_CP.png"),
-       fig_S2, width = 12, height = 7, dpi = 300)
-ggsave(here("outputs", "figures", "Figure_S2_convergence_CP.pdf"),
-       fig_S2, width = 12, height = 7)
 ```
 
 # 17. OR model robustness: Weibull simple vs Gompertz-Makeham
@@ -564,12 +550,12 @@ out_OR_GM <- basta(
   nsim = 4, niter = 50000, burnin = 5001, thinning = 20,
   updateJumps = TRUE, lifeTable = TRUE)
 
-saveRDS(out_OR_GM, here("basta_outputs", "out_OR_GM.rds"))
+saveRDS(out_OR_GM, here("outputs", "basta_outputs", "out_OR_GM.rds"))
 ```
 
 ```{r or-model-comparison-results}
-out_OR_GM <- readRDS(here("basta_outputs", "out_OR_GM.rds"))
-out_OR_WE <- readRDS(here("basta_outputs", "out_OR_WE_final.rds"))
+out_OR_GM <- readRDS(here("outputs", "basta_outputs", "out_OR_GM.rds"))
+out_OR_WE <- readRDS(here("outputs", "basta_outputs", "out_OR_WE_final.rds"))
 
 extract_mort_curve <- function(basta_out, model_label, max_age = 14) {
   data.frame(
@@ -699,10 +685,6 @@ p_gaps <- ggplot(gap_distribution,
 
 p_gaps
 
-ggsave(here("outputs", "figures", "Figure_gap_analysis.png"),
-       p_gaps, width = 6, height = 5, dpi = 300)
-ggsave(here("outputs", "figures", "Figure_gap_analysis.pdf"),
-       p_gaps, width = 6, height = 5)
 
 # Percentages for supplementary text
 gap_analysis %>%

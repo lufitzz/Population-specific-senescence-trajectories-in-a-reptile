@@ -72,10 +72,7 @@ data <- subset(data,
               !is.na(indID) & indID != 0 &
               !is.na(Age) & Age != 0 &
               !is.na(nOffspring) & nOffspring != 0) 
-# NOTE: Zero litter sizes are excluded because non-gravid status, stillbirths, 
-# and mid-pregnancy reabsorptions were not consistently recorded throughout the 
-# study. Zeros therefore cannot be distinguished from missing data, so this 
-# analysis models conditional fertility (litter size given reproduction occurred).
+# NOTE: Zero litter sizes are excluded because non-gravid status, stillbirths, and mid-pregnancy reabsorptions were not consistently recorded throughout the study. Zeros therefore cannot be distinguished from missing data, so this analysis models conditional fertility (litter size given reproduction occurred).
 
 head(data)
 
@@ -130,13 +127,13 @@ out_quad_CP <- bafta(object = dataCP, model = "quadratic",
                      niter = 50000, burnin = 10000, thinning = 50)
 
 # Save output
-dir.create(here("bafta_outputs"), showWarnings = FALSE)
-saveRDS(out_quad_CP, here("bafta_outputs", "out_quad_CP.rds"))
+dir.create(here("outputs", "bafta_outputs"), showWarnings = FALSE)
+saveRDS(out_quad_CP, here("outputs", "bafta_outputs", "out_quad_CP.rds"))
 ```
 
 ```{r load-cp-quad}
 # Load saved model
-out_quad_CP <- readRDS(here("bafta_outputs", "out_quad_CP.rds"))
+out_quad_CP <- readRDS(here("outputs", "bafta_outputs", "out_quad_CP.rds"))
 out_quad_CP
 ```
 
@@ -164,12 +161,12 @@ out_gamma_CP <- bafta(object = dataCP, model = "gamma",
                       niter = 50000, burnin = 10000, thinning = 50)
 
 # Save output
-saveRDS(out_gamma_CP, here("bafta_outputs", "out_gamma_CP.rds"))
+saveRDS(out_gamma_CP, here("outputs", "bafta_outputs", "out_gamma_CP.rds"))
 ```
 
 ```{r load-cp-gamma}
 # Load saved model
-out_gamma_CP <- readRDS(here("bafta_outputs", "out_gamma_CP.rds"))
+out_gamma_CP <- readRDS(here("outputs", "bafta_outputs", "out_gamma_CP.rds"))
 out_gamma_CP
 ```
 
@@ -197,12 +194,12 @@ out_CM_CP <- bafta(object = dataCP, model = "ColcheroMuller",
                    niter = 50000, burnin = 10000, thinning = 50)
 
 # Save output
-saveRDS(out_CM_CP, here("bafta_outputs", "out_CM_CP.rds"))
+saveRDS(out_CM_CP, here("outputs", "bafta_outputs", "out_CM_CP.rds"))
 ```
 
 ```{r load-cp-cm}
 # Load saved model
-out_CM_CP <- readRDS(here("bafta_outputs", "out_CM_CP.rds"))
+out_CM_CP <- readRDS(here("outputs", "bafta_outputs", "out_CM_CP.rds"))
 out_CM_CP
 ```
 
@@ -241,12 +238,12 @@ out_quad_OR <- bafta(object = dataOR, model = "quadratic",
                      niter = 50000, burnin = 10000, thinning = 50)
 
 # Save output
-saveRDS(out_quad_OR, here("bafta_outputs", "out_quad_OR.rds"))
+saveRDS(out_quad_OR, here("outputs", "bafta_outputs", "out_quad_OR.rds"))
 ```
 
 ```{r load-or-quad}
 # Load saved model
-out_quad_OR <- readRDS(here("bafta_outputs", "out_quad_OR.rds"))
+out_quad_OR <- readRDS(here("outputs", "bafta_outputs", "out_quad_OR.rds"))
 out_quad_OR
 ```
 
@@ -274,12 +271,12 @@ out_gamma_OR <- bafta(object = dataOR, model = "gamma",
                       niter = 50000, burnin = 10000, thinning = 50)
 
 # Save output
-saveRDS(out_gamma_OR, here("bafta_outputs", "out_gamma_OR.rds"))
+saveRDS(out_gamma_OR, here("outputs", "bafta_outputs", "out_gamma_OR.rds"))
 ```
 
 ```{r load-or-gamma}
 # Load saved model
-out_gamma_OR <- readRDS(here("bafta_outputs", "out_gamma_OR.rds"))
+out_gamma_OR <- readRDS(here("outputs", "bafta_outputs", "out_gamma_OR.rds"))
 out_gamma_OR
 ```
 
@@ -307,12 +304,12 @@ out_CM_OR <- bafta(object = dataOR, model = "ColcheroMuller",
                    niter = 50000, burnin = 10000, thinning = 50)
 
 # Save output
-saveRDS(out_CM_OR, here("bafta_outputs", "out_CM_OR.rds"))
+saveRDS(out_CM_OR, here("outputs", "bafta_outputs", "out_CM_OR.rds"))
 ```
 
 ```{r load-or-cm}
 # Load saved model
-out_CM_OR <- readRDS(here("bafta_outputs", "out_CM_OR.rds"))
+out_CM_OR <- readRDS(here("outputs", "bafta_outputs", "out_CM_OR.rds"))
 out_CM_OR
 ```
 
@@ -391,9 +388,6 @@ ggplot(fert_combined, aes(x = Age, y = Mean, color = Population, fill = Populati
   theme_classic() +
   theme(legend.position = "top")
 
-# Save
-ggsave(here("outputs", "figures", "fertility_comparison.pdf"), width = 7, height = 5)
-ggsave(here("outputs", "figures", "fertility_comparison.png"), width = 7, height = 5)
 ```
 
 ## Fertility trajectories with raw data
@@ -478,9 +472,7 @@ combined_figure <- plot_grid(
 
 combined_figure
 
-# ============== SAVE ==============
-ggsave(here("outputs", "figures", "Figure_fertility_and_parameters.pdf"), width = 7, height = 9)
-ggsave(here("outputs", "figures", "Figure_fertility_and_parameters.png"), width = 7, height = 9)
+
 ```
 
 ---
@@ -551,10 +543,7 @@ ft <- flextable(coef_table) %>%
 
 ft
 
-# Save to Word document
-save_as_docx(ft, path = here("outputs", "tables", "BaFTA_coefficients.docx"))
 
-# Also print to console
 print(coef_table)
 ```
 
@@ -591,7 +580,6 @@ ft_models <- flextable(model_comparison) %>%
   add_footer_lines("CP quadratic DIC should be interpreted with caution due to poor convergence.") %>%
   autofit()
 
-save_as_docx(ft_models, path = here("outputs", "tables", "Supplementary_Table_ModelComparison.docx"))
 
 ft_models
 ```

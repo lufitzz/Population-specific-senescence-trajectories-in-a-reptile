@@ -326,21 +326,6 @@ anova_results <- as.data.frame(anova(fit_combined)) %>%
   ) %>%
   dplyr::select(Parameter, numDF, denDF, F_value, p_value)
 
-# --- Save both tables to Word ---
-ft1 <- flextable(results_table) %>%
-  set_caption("Von Bertalanffy growth parameters and 95% CIs for each population")
-
-ft2 <- flextable(anova_results) %>%
-  set_caption("Population differences in von Bertalanffy growth parameters (F-tests from combined model)")
-
-doc <- read_docx() %>%
-  body_add_par("Table 1: Growth parameters", style = "heading 1") %>%
-  body_add_flextable(ft1) %>%
-  body_add_par("") %>%
-  body_add_par("Table 2: Population comparisons", style = "heading 1") %>%
-  body_add_flextable(ft2)
-
-print(doc, target = here("outputs", "tables", "Supp_growth.docx"))
 ```
 
 
@@ -425,7 +410,6 @@ print(results_early_growth)
 
 ```
 
-# For publication plot see Figure 2 script Panel A
 
 ## Session information
 
